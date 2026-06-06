@@ -1,0 +1,13 @@
+{
+  "$schema": "./schema/v1/hardware-profile.schema.json",
+  "version": "1",
+  "name": "Pico-8",
+  "resolution": { "width": 128, "height": 128 },
+  "palette": { "colors": 16, "transparentIndex": 0 },
+  "sprites": { "sheetWidth": 128, "sheetHeight": 128, "tileSize": 8, "maxOnScreen": 128 },
+  "map": { "width": 128, "height": 64, "tileSize": 8 },
+  "memory": { "ram": 32768, "cartRom": 32768 },
+  "audio": { "channels": 4, "sfxSlots": 64, "musicPatterns": 64, "sampleRate": 22050 },
+  "code": { "maxTokens": 8192 },
+  "cartridge": { "maxBytes": 32768 }
+}

@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Ferbento.Core/Ferbento.Core.csproj" />
+    <Project Path="src/Ferbento.Editor/Ferbento.Editor.csproj" />
+    <Project Path="src/Ferbento.Profiles/Ferbento.Profiles.csproj" />
+    <Project Path="src/Ferbento.Scripting/Ferbento.Scripting.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Ferbento.Core.Tests/Ferbento.Core.Tests.csproj" />
+  </Folder>
+</Solution>

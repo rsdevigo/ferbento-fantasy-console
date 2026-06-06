@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<SyntaxDefinition name="GDScript" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+  <Color name="Default" foreground="#D4D4D4" />
+  <Color name="Comment" foreground="#6A9955" />
+  <Color name="String" foreground="#CE9178" />
+  <Color name="Number" foreground="#B5CEA8" />
+  <Color name="Keyword" foreground="#569CD6" />
+  <Color name="Api" foreground="#4EC9B0" />
+
+  <RuleSet ignoreCase="false">
+    <Rule color="Comment">#.*</Rule>
+    <Rule color="String">"[^"\\]*(?:\\.[^"\\]*)*"</Rule>
+    <Rule color="String">'[^'\\]*(?:\\.[^'\\]*)*'</Rule>
+    <Rule color="Number">\b\d+(\.\d+)?\b</Rule>
+    <Keywords color="Keyword">
+      <Word>func</Word><Word>var</Word><Word>const</Word><Word>if</Word><Word>elif</Word>
+      <Word>else</Word><Word>for</Word><Word>while</Word><Word>return</Word><Word>class</Word>
+      <Word>pass</Word><Word>break</Word><Word>continue</Word><Word>match</Word><Word>when</Word>
+      <Word>await</Word><Word>yield</Word><Word>and</Word><Word>or</Word><Word>not</Word>
+      <Word>true</Word><Word>false</Word><Word>null</Word>
+    </Keywords>
+    <Keywords color="Api">
+      <Word>cls</Word><Word>pset</Word><Word>pget</Word><Word>color</Word><Word>line</Word>
+      <Word>rect</Word><Word>rectfill</Word><Word>circ</Word><Word>circfill</Word><Word>spr</Word>
+      <Word>sspr</Word><Word>sget</Word><Word>sset</Word><Word>map</Word><Word>mget</Word>
+      <Word>mset</Word><Word>pal</Word><Word>palt</Word><Word>camera</Word><Word>clip</Word>
+      <Word>flip</Word><Word>sfx</Word><Word>music</Word><Word>btn</Word><Word>btnp</Word>
+      <Word>peek</Word><Word>poke</Word><Word>sin</Word><Word>cos</Word><Word>rnd</Word>
+      <Word>srand</Word><Word>flr</Word><Word>abs</Word><Word>min</Word><Word>max</Word>
+      <Word>printh</Word><Word>stat</Word><Word>time</Word><Word>type</Word>
+    </Keywords>
+  </RuleSet>
+</SyntaxDefinition>

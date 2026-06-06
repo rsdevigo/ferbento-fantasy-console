@@ -1,0 +1,31 @@
+# Auto-detect text files
+* text=auto
+
+# C# source
+*.cs text diff=csharp
+
+# GDScript
+*.gd text
+
+# JSON hardware profiles
+*.json text
+
+# Solution and project files
+*.sln text
+*.slnx text
+*.csproj text
+
+# Markdown docs
+*.md text diff=markdown
+
+# EditorConfig
+*.editorconfig text
+
+# Git attributes
+.gitattributes text
+.gitignore text
+
+# Binary files
+*.png binary
+*.wav binary
+*.ogg binary

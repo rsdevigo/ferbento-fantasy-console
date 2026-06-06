@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ferbento.Core\Ferbento.Core.csproj" />
+    <ProjectReference Include="..\Ferbento.Profiles\Ferbento.Profiles.csproj" />
+    <ProjectReference Include="..\Ferbento.Cartridge\Ferbento.Cartridge.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="GDShrapt.Reader" Version="5.0.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

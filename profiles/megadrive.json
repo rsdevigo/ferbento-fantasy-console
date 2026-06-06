@@ -1,0 +1,13 @@
+{
+  "$schema": "./schema/v1/hardware-profile.schema.json",
+  "version": "1",
+  "name": "Mega Drive",
+  "resolution": { "width": 320, "height": 224 },
+  "palette": { "colors": 64, "transparentIndex": 0 },
+  "sprites": { "sheetWidth": 256, "sheetHeight": 256, "tileSize": 8, "maxOnScreen": 80 },
+  "map": { "width": 64, "height": 64, "tileSize": 8 },
+  "memory": { "ram": 65536, "cartRom": 4194304 },
+  "audio": { "channels": 6, "sfxSlots": 64, "musicPatterns": 64, "sampleRate": 44100 },
+  "code": { "maxTokens": 8192 },
+  "cartridge": { "maxBytes": 8388608 }
+}

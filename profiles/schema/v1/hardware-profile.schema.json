@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ferbento.dev/schemas/hardware-profile/v1.json",
+  "title": "Hardware Profile",
+  "description": "Describes a fantasy console hardware profile for Ferbento",
+  "type": "object",
+  "required": ["version", "name", "resolution", "palette", "sprites", "map", "memory", "audio", "code", "cartridge"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "type": "string", "pattern": "^\\d+(\\.\\d+)?$" },
+    "name": { "type": "string", "minLength": 1 },
+    "resolution": {
+      "type": "object",
+      "required": ["width", "height"],
+      "properties": {
+        "width":  { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 4096 }
+      }
+    },
+    "palette": {
+      "type": "object",
+      "required": ["colors", "transparentIndex"],
+      "properties": {
+        "colors":           { "type": "integer", "minimum": 2, "maximum": 256 },
+        "transparentIndex": { "type": "integer", "minimum": 0, "maximum": 255 }
+      }
+    },
+    "sprites": {
+      "type": "object",
+      "required": ["sheetWidth", "sheetHeight", "tileSize", "maxOnScreen"],
+      "properties": {
+        "sheetWidth":  { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "sheetHeight": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "tileSize":    { "type": "integer", "minimum": 1, "maximum": 256 },
+        "maxOnScreen": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "map": {
+      "type": "object",
+      "required": ["width", "height", "tileSize"],
+      "properties": {
+        "width":    { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "height":   { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "tileSize": { "type": "integer", "minimum": 1, "maximum": 256 }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "required": ["ram", "cartRom"],
+      "properties": {
+        "ram":    { "type": "integer", "minimum": 256, "maximum": 16777216 },
+        "cartRom": { "type": "integer", "minimum": 0, "maximum": 16777216 }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "required": ["channels", "sfxSlots", "musicPatterns", "sampleRate"],
+      "properties": {
+        "channels":      { "type": "integer", "minimum": 1, "maximum": 16 },
+        "sfxSlots":      { "type": "integer", "minimum": 1, "maximum": 256 },
+        "musicPatterns": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "sampleRate":    { "type": "integer", "minimum": 8000, "maximum": 192000 }
+      }
+    },
+    "code": {
+      "type": "object",
+      "required": ["maxTokens"],
+      "properties": {
+        "maxTokens": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "cartridge": {
+      "type": "object",
+      "required": ["maxBytes"],
+      "properties": {
+        "maxBytes": { "type": "integer", "minimum": 1, "maximum": 16777216 }
+      }
+    }
+  }
+}

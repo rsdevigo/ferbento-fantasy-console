@@ -1,0 +1,79 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:views="clr-namespace:Ferbento.Editor.Views"
+        xmlns:vm="clr-namespace:Ferbento.Editor.ViewModels"
+        mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="800"
+        x:Class="Ferbento.Editor.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="Ferbento — Fantasy Console Editor"
+        Width="1200" Height="800"
+        MinWidth="900" MinHeight="600">
+  <Grid RowDefinitions="Auto,Auto,*">
+    <Border Background="#007ACC" Padding="12,8">
+      <Grid ColumnDefinitions="Auto,*">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="Ferbento" FontSize="18" FontWeight="Bold" Foreground="White"/>
+          <TextBlock Text="Pico-8 Fantasy Console" FontSize="12" Foreground="#B3D9F2" VerticalAlignment="Center"/>
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="12">
+          <Button Content="▶ Run" Background="#28A745" Foreground="White" Padding="12,4" Click="OnRunClick"/>
+          <Button Content="⏹ Stop" Background="#DC3545" Foreground="White" Padding="12,4" Click="OnStopClick"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="1" Background="#252526" BorderBrush="#3F3F46" BorderThickness="0,0,0,1">
+      <StackPanel x:Name="TabBar" Orientation="Horizontal" Spacing="2" Margin="4,0"/>
+    </Border>
+
+    <Grid Grid.Row="2" ColumnDefinitions="*,320">
+      <Grid x:Name="ContentHost" RowDefinitions="*,Auto">
+        <views:CodeEditorView x:Name="CodeEditor"
+                              Grid.Row="0"
+                              HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"/>
+        <Border x:Name="PreviewPanel"
+                Grid.Row="1"
+                Background="#111111"
+                BorderBrush="#3F3F46"
+                BorderThickness="0,1,0,0"
+                Padding="8"
+                IsVisible="True">
+          <StackPanel Spacing="6">
+            <TextBlock Text="Screen Preview (128×128)" Foreground="#AAAAAA" FontSize="11"/>
+            <Image x:Name="ScreenPreview"
+                   Width="256"
+                   Height="256"
+                   Stretch="Fill"
+                   HorizontalAlignment="Left"/>
+          </StackPanel>
+        </Border>
+        <Border x:Name="PlaceholderPanel"
+                Grid.Row="0"
+                Grid.RowSpan="2"
+                IsVisible="False"
+                Background="#1E1E1E">
+          <TextBlock x:Name="PlaceholderText"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center"
+                     Foreground="#888888"
+                     FontSize="16"/>
+        </Border>
+      </Grid>
+
+      <Border Grid.Column="1" Background="#252526" BorderBrush="#3F3F46" BorderThickness="1,0,0,0">
+        <Grid RowDefinitions="Auto,*">
+          <Border Background="#2D2D30" Padding="8">
+            <TextBlock Text="Console Output" Foreground="#CCCCCC" FontSize="12"/>
+          </Border>
+          <ScrollViewer Grid.Row="1" Padding="8">
+            <TextBlock x:Name="ConsoleOutput" Foreground="#CCCCCC" FontFamily="Consolas" FontSize="12"
+                       TextWrapping="Wrap" Text="Ready."/>
+          </ScrollViewer>
+        </Grid>
+      </Border>
+    </Grid>
+  </Grid>
+</Window>

@@ -1,0 +1,13 @@
+{
+  "$schema": "./schema/v1/hardware-profile.schema.json",
+  "version": "1",
+  "name": "Game Boy Color",
+  "resolution": { "width": 160, "height": 144 },
+  "palette": { "colors": 56, "transparentIndex": 0 },
+  "sprites": { "sheetWidth": 128, "sheetHeight": 256, "tileSize": 8, "maxOnScreen": 40 },
+  "map": { "width": 32, "height": 32, "tileSize": 8 },
+  "memory": { "ram": 32768, "cartRom": 1048576 },
+  "audio": { "channels": 4, "sfxSlots": 32, "musicPatterns": 32, "sampleRate": 44100 },
+  "code": { "maxTokens": 4096 },
+  "cartridge": { "maxBytes": 2097152 }
+}
