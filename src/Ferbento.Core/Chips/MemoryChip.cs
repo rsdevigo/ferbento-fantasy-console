@@ -19,5 +19,16 @@ public sealed class MemoryChip : IChip
 
     public void Reset() => Memory.Clear();
 
+    /// <summary>
+    /// Clears volatile runtime regions (draw state, screen buffer in RAM) but preserves
+    /// cart asset data (GFX, map, SFX, palette user data).
+    /// </summary>
+    public void ResetRuntimeOnly()
+    {
+        var mem = Memory;
+        if (MemoryMap.DrawStateStart < mem.Size)
+            mem.Memset(MemoryMap.DrawStateStart, 0, mem.Size - MemoryMap.DrawStateStart);
+    }
+
     public void Tick() { }
 }

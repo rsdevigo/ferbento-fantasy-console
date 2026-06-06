@@ -12,12 +12,22 @@ public sealed class SpriteChip : IChip
     private int _sheetWidth = 128;
     private int _sheetHeight = 128;
     private int _tileSize = 8;
+    private bool _usesGfx2Bank;
+
+    public int SheetWidth => _sheetWidth;
+    public int SheetHeight => _sheetHeight;
+    public int TileSize => _tileSize;
+    public int SpritesPerRow => _sheetWidth / _tileSize;
+    public int SpriteCount => SpritesPerRow * (_sheetHeight / _tileSize);
+    public bool UsesGfx2Bank => _usesGfx2Bank;
 
     public void Configure(HardwareProfile profile)
     {
         _sheetWidth = profile.Sprites.SheetWidth;
         _sheetHeight = profile.Sprites.SheetHeight;
         _tileSize = profile.Sprites.TileSize;
+        _usesGfx2Bank = profile.Name.Equals("Pico-8", StringComparison.OrdinalIgnoreCase)
+            && _sheetHeight > 64;
     }
 
     public void Initialize(ChipBus bus) => _bus = bus;
@@ -70,6 +80,14 @@ public sealed class SpriteChip : IChip
     {
         if (x < 0 || y < 0 || x >= _sheetWidth || y >= _sheetHeight)
             throw new HardwareLimitException($"Sprite coordinate ({x},{y}) out of bounds.");
+
+        var halfHeight = _sheetHeight / 2;
+        if (_usesGfx2Bank && y >= halfHeight)
+        {
+            var localY = y - halfHeight;
+            return MemoryMap.Gfx2Start + (localY * _sheetWidth + x) / 2;
+        }
+
         return MemoryMap.GfxStart + (y * _sheetWidth + x) / 2;
     }
 }

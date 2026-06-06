@@ -11,6 +11,7 @@ using Avalonia.Threading;
 using Ferbento.Core.Chips;
 using Ferbento.Editor.ViewModels;
 using Ferbento.Editor.Views;
+using Ferbento.Profiles.BuiltIn;
 using Ferbento.Scripting.Runtime;
 
 namespace Ferbento.Editor;
@@ -18,6 +19,7 @@ namespace Ferbento.Editor;
 public partial class MainWindow : Window
 {
     private readonly MainWindowViewModel _viewModel = new();
+    private readonly EditorSession _session = new(BuiltInProfiles.Pico8());
     private readonly Dictionary<string, Control> _views = new();
     private FerbentoRuntime? _runtime;
     private DispatcherTimer? _runTimer;
@@ -26,26 +28,49 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = _viewModel;
+        WireSession();
         BuildViews();
         BuildTabBar();
         UpdateTabVisibility();
+        UpdateWindowTitle();
+    }
+
+    private void WireSession()
+    {
+        _session.GetSourceCode = () => CodeEditor.SourceCode;
+        _session.SetSourceCode = code => CodeEditor.SourceCode = code;
+        _session.DirtyChanged += UpdateWindowTitle;
+        CodeEditor.SourceCodeChanged += (_, _) => _session.MarkDirty();
+    }
+
+    private void UpdateWindowTitle()
+    {
+        var dirty = _session.IsDirty ? " *" : "";
+        Title = $"{_session.ProjectDisplayName}{dirty} — Ferbento";
     }
 
     private void BuildViews()
     {
         _views["code"] = CodeEditor;
+
+        SpriteEditorView? spriteView = null;
+        TilemapEditorView? tilemapView = null;
+        PaletteEditorView? paletteView = null;
+        ProfileEditorView? profileView = null;
+
         var newViews = new (string id, Control view)[]
         {
-            ("sprites", new SpriteEditorView()),
-            ("tilemap", new TilemapEditorView()),
-            ("palette", new PaletteEditorView()),
+            ("sprites", spriteView = new SpriteEditorView()),
+            ("tilemap", tilemapView = new TilemapEditorView()),
+            ("palette", paletteView = new PaletteEditorView()),
             ("sfx", new SfxEditorView()),
             ("music", new MusicTrackerView()),
             ("assets", new AssetBrowserView()),
-            ("profiles", new ProfileEditorView()),
+            ("profiles", profileView = new ProfileEditorView()),
             ("debug", new DebugPanelView()),
             ("project", new ProjectManagerView()),
         };
+
         foreach (var (id, view) in newViews)
         {
             view.IsVisible = false;
@@ -55,7 +80,32 @@ public partial class MainWindow : Window
             Grid.SetRowSpan(view, 2);
             ContentHost.Children.Add(view);
             _views[id] = view;
+
+            if (view is IProfileAwareEditor editor)
+                _session.RegisterEditor(editor);
         }
+
+        profileView?.SetProfileChangeHandler(async profile =>
+        {
+            var applied = await _session.RequestProfileChangeAsync(profile, this);
+            if (applied)
+                profileView.ShowProfile(_session.Profile);
+            return applied;
+        });
+        profileView?.ShowProfile(_session.Profile);
+
+        var markDirty = () => _session.MarkDirty();
+        spriteView!.SetEditedHandler(markDirty);
+        tilemapView!.SetEditedHandler(markDirty);
+        paletteView!.SetEditedHandler(markDirty);
+
+        paletteView!.PaletteChanged += () =>
+        {
+            spriteView?.RefreshPalette();
+            tilemapView?.RefreshPalette();
+        };
+
+        _session.PropagateToEditors();
     }
 
     private void BuildTabBar()
@@ -108,11 +158,14 @@ public partial class MainWindow : Window
 
         try
         {
-            _runtime = new FerbentoRuntime(source: CodeEditor.SourceCode);
+            _runtime = new FerbentoRuntime(
+                bus: _session.Bus,
+                source: CodeEditor.SourceCode,
+                preserveCartData: true);
             _runtime.Sandbox.Context.PrintHandler = AppendConsole;
             _runtime.Loop.Boot();
             _runtime.Loop.Step();
-            UpdateScreenPreview(_runtime.Bus);
+            UpdateScreenPreview(_session.Bus);
 
             AppendConsole($"Running cart... Frame {_runtime.Loop.FrameCount}");
 
@@ -123,12 +176,14 @@ public partial class MainWindow : Window
                 try
                 {
                     _runtime.Loop.Step();
-                    UpdateScreenPreview(_runtime.Bus);
+                    UpdateScreenPreview(_session.Bus);
                 }
                 catch (Exception ex)
                 {
                     AppendConsole($"Runtime error: {ex.Message}");
                     StopRunTimer();
+                    _runtime = null;
+                    _session.RefreshEditorsFromBus();
                 }
             };
             _runTimer.Start();
@@ -142,6 +197,8 @@ public partial class MainWindow : Window
     private void OnStopClick(object? sender, RoutedEventArgs e)
     {
         StopRunTimer();
+        _runtime = null;
+        _session.RefreshEditorsFromBus();
         AppendConsole("Stopped.");
     }
 
@@ -157,7 +214,7 @@ public partial class MainWindow : Window
     private void UpdateScreenPreview(ChipBus bus)
     {
         var buffer = bus.Display.FrontBuffer;
-        var palette = ColorChip.Pico8Palette;
+        var colorChip = bus.Color;
         var width = buffer.Width;
         var height = buffer.Height;
 
@@ -167,6 +224,15 @@ public partial class MainWindow : Window
             PixelFormat.Rgba8888,
             AlphaFormat.Opaque);
 
+        if (_previewBitmap.PixelSize.Width != width || _previewBitmap.PixelSize.Height != height)
+        {
+            _previewBitmap = new WriteableBitmap(
+                new PixelSize(width, height),
+                new Vector(96, 96),
+                PixelFormat.Rgba8888,
+                AlphaFormat.Opaque);
+        }
+
         using (var locked = _previewBitmap.Lock())
         {
             var pixels = new byte[locked.RowBytes * height];
@@ -175,7 +241,7 @@ public partial class MainWindow : Window
                 for (var x = 0; x < width; x++)
                 {
                     var colorIndex = buffer.GetPixel(x, y) & 0xF;
-                    var rgb = palette[colorIndex];
+                    var rgb = colorChip.GetColor(colorIndex);
                     var offset = y * locked.RowBytes + x * 4;
                     pixels[offset] = (byte)((rgb >> 16) & 0xFF);
                     pixels[offset + 1] = (byte)((rgb >> 8) & 0xFF);

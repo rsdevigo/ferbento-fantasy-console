@@ -50,6 +50,18 @@ public sealed class ChipBus
             chip.Reset();
     }
 
+    /// <summary>
+    /// Resets game runtime state for Run/Boot without wiping editor cart assets.
+    /// </summary>
+    public void ResetForRun()
+    {
+        Memory.ResetRuntimeOnly();
+        Display.Reset();
+        Input.Reset();
+        Sound.Reset();
+        Music.Reset();
+    }
+
     public void Tick()
     {
         foreach (var chip in _chips)

@@ -12,6 +12,9 @@ public sealed class TilemapChip : IChip
     private int _width = 128;
     private int _height = 64;
 
+    public int Width => _width;
+    public int Height => _height;
+
     public void Configure(HardwareProfile profile)
     {
         _width = profile.Map.Width;

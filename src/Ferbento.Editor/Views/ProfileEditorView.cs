@@ -2,17 +2,29 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Ferbento.Profiles.BuiltIn;
+using Ferbento.Profiles.Models;
 
 namespace Ferbento.Editor.Views;
 
 public class ProfileEditorView : UserControl
 {
+    private TextBlock _titleBlock = null!;
+    private TextBlock _descriptionBlock = null!;
+    private StackPanel _propertiesPanel = null!;
+    private Func<HardwareProfile, Task<bool>>? _onProfileSelected;
+
     public ProfileEditorView()
     {
         HorizontalAlignment = HorizontalAlignment.Stretch;
         VerticalAlignment = VerticalAlignment.Stretch;
         Content = BuildLayout();
     }
+
+    public void SetProfileChangeHandler(Func<HardwareProfile, Task<bool>> handler) =>
+        _onProfileSelected = handler;
+
+    public void ShowProfile(HardwareProfile profile) => UpdateDisplay(profile);
 
     private Control BuildLayout()
     {
@@ -40,48 +52,24 @@ public class ProfileEditorView : UserControl
         {
             Background = new SolidColorBrush(Color.Parse("#2D2D30")),
             Margin = new Thickness(4, 4, 0, 0),
-            Children =
-            {
-                CreateButton("Pico-8", "#569CD6"),
-                CreateButton("Game Boy", "#4EC9B0"),
-                CreateButton("GBC", "#4EC9B0"),
-                CreateButton("NES", "#CE9178"),
-                CreateButton("SNES", "#CE9178"),
-                CreateButton("Mega Drive", "#CE9178"),
-                CreateButton("Import JSON...", "#DCDCAA"),
-            }
         };
+        foreach (var profile in BuiltInProfiles.All)
+        {
+            var p = profile;
+            var btn = CreateButton(p.Name, "#569CD6");
+            btn.Click += (_, _) => SelectProfile(p);
+            toolbar.Children.Add(btn);
+        }
+        toolbar.Children.Add(CreateButton("Import JSON...", "#DCDCAA"));
         Grid.SetRow(toolbar, 1);
         Grid.SetColumnSpan(toolbar, 3);
 
+        _propertiesPanel = new StackPanel { Spacing = 2 };
         var sidebar = new Border
         {
             Background = new SolidColorBrush(Color.Parse("#252526")),
             Padding = new Thickness(4),
-            Child = new StackPanel
-            {
-                Spacing = 2,
-                Children =
-                {
-                    CreateSectionLabel("Display"),
-                    CreateProperty("Width", "128"),
-                    CreateProperty("Height", "128"),
-                    CreateSectionLabel("Palette"),
-                    CreateProperty("Colors", "16"),
-                    CreateProperty("Transparent", "0"),
-                    CreateSectionLabel("Sprites"),
-                    CreateProperty("Sheet W", "128"),
-                    CreateProperty("Sheet H", "128"),
-                    CreateProperty("Tile Size", "8"),
-                    CreateProperty("Max OnScreen", "128"),
-                    CreateSectionLabel("Map"),
-                    CreateProperty("Width", "128"),
-                    CreateProperty("Height", "64"),
-                    CreateSectionLabel("Memory"),
-                    CreateProperty("RAM", "32 KB"),
-                    CreateProperty("Cart ROM", "32 KB"),
-                }
-            }
+            Child = _propertiesPanel,
         };
         Grid.SetRow(sidebar, 2);
 
@@ -93,6 +81,19 @@ public class ProfileEditorView : UserControl
         Grid.SetColumn(divider, 1);
         Grid.SetRow(divider, 2);
 
+        _titleBlock = new TextBlock
+        {
+            Foreground = new SolidColorBrush(Color.Parse("#569CD6")),
+            FontSize = 18,
+            FontWeight = FontWeight.Bold,
+        };
+        _descriptionBlock = new TextBlock
+        {
+            Foreground = new SolidColorBrush(Color.Parse("#888888")),
+            FontSize = 13,
+            TextWrapping = TextWrapping.Wrap,
+        };
+
         var details = new Border
         {
             Background = new SolidColorBrush(Color.Parse("#1E1E1E")),
@@ -102,20 +103,8 @@ public class ProfileEditorView : UserControl
                 Spacing = 8,
                 Children =
                 {
-                    new TextBlock
-                    {
-                        Text = "Pico-8 Compatible Profile",
-                        Foreground = new SolidColorBrush(Color.Parse("#569CD6")),
-                        FontSize = 18,
-                        FontWeight = FontWeight.Bold,
-                    },
-                    new TextBlock
-                    {
-                        Text = "All settings match the Pico-8 fantasy console specification.",
-                        Foreground = new SolidColorBrush(Color.Parse("#888888")),
-                        FontSize = 13,
-                        TextWrapping = TextWrapping.Wrap,
-                    },
+                    _titleBlock,
+                    _descriptionBlock,
                     new Border
                     {
                         Background = new SolidColorBrush(Color.Parse("#2D2D30")),
@@ -123,7 +112,7 @@ public class ProfileEditorView : UserControl
                         Margin = new Thickness(0, 8, 0, 0),
                         Child = new TextBlock
                         {
-                            Text = "Warning: Changing profile settings may break cartridges designed for a specific hardware target.",
+                            Text = "Changing profile reconfigures sprite sheet, tilemap, and palette editors.",
                             Foreground = new SolidColorBrush(Color.Parse("#DCDCAA")),
                             FontSize = 12,
                             TextWrapping = TextWrapping.Wrap,
@@ -141,35 +130,71 @@ public class ProfileEditorView : UserControl
         root.Children.Add(divider);
         root.Children.Add(details);
 
+        UpdateDisplay(BuiltInProfiles.Pico8());
         return root;
     }
 
-    private static Button CreateButton(string text, string color)
+    private async void SelectProfile(HardwareProfile profile)
     {
-        return new Button
+        if (_onProfileSelected != null)
         {
-            Content = text,
-            Margin = new Thickness(4),
-            Padding = new Thickness(10, 4),
-            Background = new SolidColorBrush(Color.Parse(color)),
-            Foreground = Brushes.White,
-            FontSize = 12,
-            BorderThickness = new Thickness(0),
-            Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
-        };
+            var applied = await _onProfileSelected(profile);
+            if (applied)
+                UpdateDisplay(profile);
+            return;
+        }
+
+        UpdateDisplay(profile);
     }
 
-    private static TextBlock CreateSectionLabel(string text)
+    private void UpdateDisplay(HardwareProfile profile)
     {
-        return new TextBlock
-        {
-            Text = text,
-            Foreground = new SolidColorBrush(Color.Parse("#569CD6")),
-            FontSize = 11,
-            FontWeight = FontWeight.Bold,
-            Margin = new Thickness(0, 8, 0, 2),
-        };
+        _titleBlock.Text = profile.Name;
+        _descriptionBlock.Text =
+            $"Resolution {profile.Resolution.Width}×{profile.Resolution.Height}, " +
+            $"{profile.Palette.Colors} colors, sprite sheet {profile.Sprites.SheetWidth}×{profile.Sprites.SheetHeight} " +
+            $"({profile.Sprites.TileSize}px tiles), map {profile.Map.Width}×{profile.Map.Height}.";
+
+        _propertiesPanel.Children.Clear();
+        _propertiesPanel.Children.Add(CreateSectionLabel("Display"));
+        _propertiesPanel.Children.Add(CreateProperty("Width", profile.Resolution.Width.ToString()));
+        _propertiesPanel.Children.Add(CreateProperty("Height", profile.Resolution.Height.ToString()));
+        _propertiesPanel.Children.Add(CreateSectionLabel("Palette"));
+        _propertiesPanel.Children.Add(CreateProperty("Colors", profile.Palette.Colors.ToString()));
+        _propertiesPanel.Children.Add(CreateProperty("Transparent", profile.Palette.TransparentIndex.ToString()));
+        _propertiesPanel.Children.Add(CreateSectionLabel("Sprites"));
+        _propertiesPanel.Children.Add(CreateProperty("Sheet W", profile.Sprites.SheetWidth.ToString()));
+        _propertiesPanel.Children.Add(CreateProperty("Sheet H", profile.Sprites.SheetHeight.ToString()));
+        _propertiesPanel.Children.Add(CreateProperty("Tile Size", profile.Sprites.TileSize.ToString()));
+        _propertiesPanel.Children.Add(CreateProperty("Max OnScreen", profile.Sprites.MaxOnScreen.ToString()));
+        _propertiesPanel.Children.Add(CreateSectionLabel("Map"));
+        _propertiesPanel.Children.Add(CreateProperty("Width", profile.Map.Width.ToString()));
+        _propertiesPanel.Children.Add(CreateProperty("Height", profile.Map.Height.ToString()));
+        _propertiesPanel.Children.Add(CreateSectionLabel("Memory"));
+        _propertiesPanel.Children.Add(CreateProperty("RAM", $"{profile.Memory.Ram / 1024} KB"));
+        _propertiesPanel.Children.Add(CreateProperty("Cart ROM", $"{profile.Memory.CartRom / 1024} KB"));
     }
+
+    private static Button CreateButton(string text, string color) => new()
+    {
+        Content = text,
+        Margin = new Thickness(4),
+        Padding = new Thickness(10, 4),
+        Background = new SolidColorBrush(Color.Parse(color)),
+        Foreground = Brushes.White,
+        FontSize = 12,
+        BorderThickness = new Thickness(0),
+        Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
+    };
+
+    private static TextBlock CreateSectionLabel(string text) => new()
+    {
+        Text = text,
+        Foreground = new SolidColorBrush(Color.Parse("#569CD6")),
+        FontSize = 11,
+        FontWeight = FontWeight.Bold,
+        Margin = new Thickness(0, 8, 0, 2),
+    };
 
     private static Control CreateProperty(string name, string value)
     {
@@ -178,14 +203,12 @@ public class ProfileEditorView : UserControl
             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
             Margin = new Thickness(0, 1),
         };
-
-        var nameBlock = new TextBlock
+        grid.Children.Add(new TextBlock
         {
             Text = name,
             Foreground = new SolidColorBrush(Color.Parse("#888888")),
             FontSize = 11,
-        };
-
+        });
         var valueBlock = new TextBlock
         {
             Text = value,
@@ -194,8 +217,6 @@ public class ProfileEditorView : UserControl
             HorizontalAlignment = HorizontalAlignment.Right,
         };
         Grid.SetColumn(valueBlock, 1);
-
-        grid.Children.Add(nameBlock);
         grid.Children.Add(valueBlock);
         return grid;
     }

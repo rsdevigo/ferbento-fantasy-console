@@ -13,6 +13,7 @@ public class CodeEditorView : UserControl
 {
     private readonly TextEditor _scriptEditor;
     private CompletionWindow? _completionWindow;
+    private bool _suppressChangeNotification;
     private static readonly IBrush EditorBackground = new SolidColorBrush(Color.Parse("#1E1E1E"));
     private static readonly IBrush EditorForeground = new SolidColorBrush(Color.Parse("#D4D4D4"));
 
@@ -22,6 +23,7 @@ public class CodeEditorView : UserControl
         VerticalAlignment = VerticalAlignment.Stretch;
 
         _scriptEditor = CreateScriptEditor();
+        _scriptEditor.TextChanged += (_, _) => OnSourceCodeChanged();
         Content = BuildLayout(_scriptEditor);
         _scriptEditor.Text = DefaultScript;
         Loaded += (_, _) =>
@@ -34,7 +36,20 @@ public class CodeEditorView : UserControl
     public string SourceCode
     {
         get => _scriptEditor.Text;
-        set => _scriptEditor.Text = value;
+        set
+        {
+            _suppressChangeNotification = true;
+            _scriptEditor.Text = value;
+            _suppressChangeNotification = false;
+        }
+    }
+
+    public event EventHandler? SourceCodeChanged;
+
+    private void OnSourceCodeChanged()
+    {
+        if (!_suppressChangeNotification)
+            SourceCodeChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private static Grid BuildLayout(TextEditor editor)

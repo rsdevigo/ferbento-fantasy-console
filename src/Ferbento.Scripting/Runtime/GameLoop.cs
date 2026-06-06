@@ -10,6 +10,7 @@ public sealed class GameLoop
     private readonly bool _hasUpdate60;
     private readonly bool _hasUpdate;
     private readonly bool _hasDraw;
+    private readonly bool _preserveCartData;
     private bool _initialized;
     private int _frameCounter;
     private double _lastFrameTime;
@@ -21,10 +22,11 @@ public sealed class GameLoop
     public ChipBus Bus => _bus;
     public int FrameCount => _frameCounter;
 
-    public GameLoop(ChipBus bus, ScriptSandbox sandbox)
+    public GameLoop(ChipBus bus, ScriptSandbox sandbox, bool preserveCartData = false)
     {
         _bus = bus;
         _sandbox = sandbox;
+        _preserveCartData = preserveCartData;
         _hasUpdate60 = sandbox.HasFunction("_update60");
         _hasUpdate = sandbox.HasFunction("_update");
         _hasDraw = sandbox.HasFunction("_draw");
@@ -34,7 +36,10 @@ public sealed class GameLoop
 
     public void Boot()
     {
-        _bus.Reset();
+        if (_preserveCartData)
+            _bus.ResetForRun();
+        else
+            _bus.Reset();
         _initialized = false;
         _frameCounter = 0;
         _sandbox.Context.BootTime = GetTimeSeconds();

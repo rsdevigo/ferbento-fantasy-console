@@ -2,6 +2,8 @@ using Ferbento.Profiles.Models;
 
 namespace Ferbento.Profiles.BuiltIn;
 
+// DefaultColors on PaletteSpec are populated from PaletteDefaults at profile creation.
+
 public static class BuiltInProfiles
 {
     public static IReadOnlyList<HardwareProfile> All => new[]
@@ -24,7 +26,12 @@ public static class BuiltInProfiles
     {
         Name = "Pico-8",
         Resolution = new ResolutionSpec { Width = 128, Height = 128 },
-        Palette = new PaletteSpec { Colors = 16, TransparentIndex = 0 },
+        Palette = new PaletteSpec
+        {
+            Colors = 16,
+            TransparentIndex = 0,
+            DefaultColors = PaletteDefaults.Pico8Hex,
+        },
         Sprites = new SpriteSpec { SheetWidth = 128, SheetHeight = 128, TileSize = 8, MaxOnScreen = 128 },
         Map = new MapSpec { Width = 128, Height = 64, TileSize = 8 },
         Memory = new MemorySpec { Ram = 32768, CartRom = 32768 },
@@ -37,7 +44,12 @@ public static class BuiltInProfiles
     {
         Name = "Game Boy",
         Resolution = new ResolutionSpec { Width = 160, Height = 144 },
-        Palette = new PaletteSpec { Colors = 4, TransparentIndex = 0 },
+        Palette = new PaletteSpec
+        {
+            Colors = 4,
+            TransparentIndex = 0,
+            DefaultColors = PaletteDefaults.GameBoyHex,
+        },
         Sprites = new SpriteSpec { SheetWidth = 128, SheetHeight = 128, TileSize = 8, MaxOnScreen = 40 },
         Map = new MapSpec { Width = 32, Height = 32, TileSize = 8 },
         Memory = new MemorySpec { Ram = 8192, CartRom = 32768 },
