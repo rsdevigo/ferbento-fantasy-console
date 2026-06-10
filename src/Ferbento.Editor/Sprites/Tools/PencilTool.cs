@@ -24,7 +24,7 @@ public sealed class PencilTool : ISpriteTool
     {
         if (ctx.ActiveStroke == null) return;
         if (ctx.LastPointer is { } last)
-            PixelDrawing.InterpolateStroke(ctx.Document, last.x, last.y, input.LocalX, input.LocalY, ctx.DrawColor(input), ctx.Selection);
+            PixelDrawing.InterpolateStroke(ctx.Document, last.x, last.y, input.LocalX, input.LocalY, ctx.DrawColor(input), ctx.Selection, ctx.BrushSize);
         else
             Paint(ctx, input);
         ctx.LastPointer = (input.LocalX, input.LocalY);
@@ -39,7 +39,7 @@ public sealed class PencilTool : ISpriteTool
 
     private static void Paint(SpriteEditorContext ctx, PointerInput input)
     {
-        PixelDrawing.SetPixelSafe(ctx.Document, input.LocalX, input.LocalY, ctx.DrawColor(input), ctx.Selection);
+        PixelDrawing.PaintBrush(ctx.Document, input.LocalX, input.LocalY, ctx.DrawColor(input), ctx.BrushSize, ctx.Selection);
         ctx.LastPointer = (input.LocalX, input.LocalY);
         ctx.RequestRefresh?.Invoke();
     }

@@ -9,6 +9,7 @@ public enum SpriteEditorAction
     MoveUp, MoveDown, MoveLeft, MoveRight,
     ClearSelection, ClearArea, SwapColors, ClearSprite,
     ToolPencil, ToolFill, ToolPicker, ToolSelect, ToolStamp, ToolShape,
+    BrushSmaller, BrushLarger,
 }
 
 public static class SpriteEditorInputMap

@@ -79,6 +79,8 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
         {
             if (Document.CurrentSpriteIndex == value) return;
             Document.CurrentSpriteIndex = value;
+            if (!Selection.HasSpriteSelection)
+                UpdateViewRegion();
             OnPropertyChanged();
             OnPropertyChanged(nameof(SpriteLabel));
             NotifyFlagsChanged();
@@ -102,8 +104,21 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
             ? $"Sprite #{CurrentSpriteIndex} (GFX2)"
             : $"Sprite #{CurrentSpriteIndex}";
 
-    public string StatusText =>
-        $"Zoom {Viewport.ZoomPercent}% | Color {PrimaryColor}/{SecondaryColor} | {ActiveToolLabel}";
+    public int BrushSize => _ctx.BrushSize;
+    public int ViewWidth => Document.ViewWidth;
+    public int ViewHeight => Document.ViewHeight;
+
+    public string StatusText
+    {
+        get
+        {
+            var view = ViewWidth == ViewHeight && ViewWidth == TileSize
+                ? $"{TileSize}×{TileSize}"
+                : $"{ViewWidth}×{ViewHeight}";
+            var brush = SelectedTool == "pencil" ? $" | Brush {BrushSize}×{BrushSize}" : "";
+            return $"Zoom {Viewport.ZoomPercent}% | {view}{brush} | Color {PrimaryColor}/{SecondaryColor} | {ActiveToolLabel}";
+        }
+    }
 
     public SpriteEditorController()
     {
@@ -152,6 +167,65 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
             OnPropertyChanged(nameof(StatusText));
     }
 
+    public void UpdateViewRegion()
+    {
+        if (Selection.HasSpriteSelection && Selection.SpriteIndices.Count > 0)
+        {
+            var minX = int.MaxValue;
+            var minY = int.MaxValue;
+            var maxX = 0;
+            var maxY = 0;
+            foreach (var idx in Selection.SpriteIndices)
+            {
+                var (ox, oy) = Document.SpriteOriginFor(idx);
+                minX = Math.Min(minX, ox);
+                minY = Math.Min(minY, oy);
+                maxX = Math.Max(maxX, ox + TileSize);
+                maxY = Math.Max(maxY, oy + TileSize);
+            }
+            Document.SetViewRegion(minX, minY, maxX - minX, maxY - minY);
+        }
+        else
+            Document.ResetViewToCurrentSprite();
+
+        OnPropertyChanged(nameof(ViewWidth));
+        OnPropertyChanged(nameof(ViewHeight));
+        OnPropertyChanged(nameof(StatusText));
+        RequestRefresh();
+    }
+
+    public void AdjustBrushSize(int delta)
+    {
+        var sizes = new[] { 1, 2, 4 };
+        var idx = Array.IndexOf(sizes, BrushSize);
+        if (idx < 0) idx = 0;
+        idx = Math.Clamp(idx + delta, 0, sizes.Length - 1);
+        _ctx.BrushSize = sizes[idx];
+        OnPropertyChanged(nameof(BrushSize));
+        OnPropertyChanged(nameof(StatusText));
+    }
+
+    public void SelectSpritesInSheetRect(int sheetX0, int sheetY0, int sheetX1, int sheetY1)
+    {
+        var tile = TileSize;
+        var col0 = Math.Min(sheetX0, sheetX1) / tile;
+        var col1 = Math.Max(sheetX0, sheetX1) / tile;
+        var row0 = Math.Min(sheetY0, sheetY1) / tile;
+        var row1 = Math.Max(sheetY0, sheetY1) / tile;
+        var indices = new List<int>();
+        for (var row = row0; row <= row1; row++)
+        for (var col = col0; col <= col1; col++)
+        {
+            var index = row * SpritesPerRow + col;
+            if (index >= 0 && index < SpriteCount)
+                indices.Add(index);
+        }
+        if (indices.Count == 0) return;
+        Selection.SetSprites(indices);
+        CurrentSpriteIndex = indices[0];
+        UpdateViewRegion();
+    }
+
     public void SetProfile(HardwareProfile profile)
     {
         Document.SetProfile(profile);
@@ -164,12 +238,14 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
         OnPropertyChanged(nameof(PaletteCount));
         OnPropertyChanged(nameof(UsesGfx2Bank));
         CurrentSpriteIndex = Math.Min(CurrentSpriteIndex, Math.Max(0, SpriteCount - 1));
+        UpdateViewRegion();
     }
 
     public void SetChipBus(ChipBus bus)
     {
         Document.SetChipBus(bus);
         Palette.PaletteCount = Document.PaletteCount;
+        UpdateViewRegion();
     }
 
     public void SwitchGfxBank(int bank) => GfxBank = bank == 0 ? 0 : 1;
@@ -312,6 +388,8 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
         if (key == "I") return SpriteEditorAction.ToolPicker;
         if (key == "T") return SpriteEditorAction.ToolStamp;
         if (key == "L") return SpriteEditorAction.ToolShape;
+        if (key is "OemOpenBrackets" or "Subtract" && !ctrl) return SpriteEditorAction.BrushSmaller;
+        if (key is "OemCloseBrackets" or "Add" && !ctrl) return SpriteEditorAction.BrushLarger;
         if (key == "Left") return shift ? SpriteEditorAction.ShiftLeft : SpriteEditorAction.MoveLeft;
         if (key == "Right") return shift ? SpriteEditorAction.ShiftRight : SpriteEditorAction.MoveRight;
         if (key == "Up") return shift ? SpriteEditorAction.ShiftUp : SpriteEditorAction.MoveUp;
@@ -373,6 +451,12 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
             case SpriteEditorAction.ToolShape:
                 if (SelectedTool == "shape") CycleShapeMode();
                 else SelectedTool = "shape";
+                return true;
+            case SpriteEditorAction.BrushSmaller:
+                AdjustBrushSize(-1);
+                return true;
+            case SpriteEditorAction.BrushLarger:
+                AdjustBrushSize(1);
                 return true;
         }
         return false;
@@ -627,15 +711,21 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
         if (ctrl)
         {
             Selection.SetSprites(Enumerable.Range(0, SpriteCount));
+            UpdateViewRegion();
+            RequestRefresh();
             return;
         }
 
         if (shift)
+        {
             Selection.AddSprite(index);
+            UpdateViewRegion();
+        }
         else
         {
             Selection.Clear();
             CurrentSpriteIndex = index;
+            UpdateViewRegion();
         }
         RequestRefresh();
     }

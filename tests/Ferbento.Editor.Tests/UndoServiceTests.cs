@@ -36,7 +36,7 @@ public class UndoServiceTests
         doc.SetChipBus(bus);
 
         var undo = new UndoService();
-        var stroke = new DrawStrokeCommand(doc, 0);
+        var stroke = new DrawStrokeCommand(doc);
         undo.PushExecuted(stroke);
         doc.SetLocalPixel(0, 0, 8);
         doc.SetLocalPixel(1, 0, 8);

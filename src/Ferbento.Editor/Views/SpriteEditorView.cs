@@ -34,6 +34,9 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
 
     private bool _isDrawing;
     private bool _isRightButton;
+    private bool _sheetDragging;
+    private int _sheetDragStartX;
+    private int _sheetDragStartY;
     private KeyModifiers _keyModifiers;
 
     private const int SheetZoom = 2;
@@ -68,12 +71,17 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
                 or nameof(SpriteEditorController.SheetHeight)
                 or nameof(SpriteEditorController.PaletteCount)
                 or nameof(SpriteEditorController.SelectedTool)
+                or nameof(SpriteEditorController.ViewWidth)
+                or nameof(SpriteEditorController.ViewHeight)
+                or nameof(SpriteEditorController.BrushSize)
                 or nameof(SpriteEditorController.StatusText))
             {
                 if (e.PropertyName is nameof(SpriteEditorController.TileSize)
                     or nameof(SpriteEditorController.SheetWidth)
                     or nameof(SpriteEditorController.SheetHeight)
-                    or nameof(SpriteEditorController.PaletteCount))
+                    or nameof(SpriteEditorController.PaletteCount)
+                    or nameof(SpriteEditorController.ViewWidth)
+                    or nameof(SpriteEditorController.ViewHeight))
                 {
                     RebuildPaletteSwatches();
                     RebuildBitmaps();
@@ -107,12 +115,13 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
 
     private void RebuildBitmaps()
     {
-        var tile = Ctrl.TileSize;
+        var vw = Ctrl.ViewWidth;
+        var vh = Ctrl.ViewHeight;
         var zoom = Ctrl.Viewport.Zoom;
         _canvasBitmap?.Dispose();
         _sheetBitmap?.Dispose();
         _canvasBitmap = new WriteableBitmap(
-            new PixelSize(tile * zoom, tile * zoom),
+            new PixelSize(vw * zoom, vh * zoom),
             new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
         _sheetBitmap = new WriteableBitmap(
             new PixelSize(Ctrl.SheetWidth * SheetZoom, Ctrl.SheetHeight * SheetZoom),
@@ -126,9 +135,10 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
     private void RefreshCanvas()
     {
         if (_canvasBitmap == null) return;
-        var tile = Ctrl.TileSize;
+        var vw = Ctrl.ViewWidth;
+        var vh = Ctrl.ViewHeight;
         var zoom = Ctrl.Viewport.Zoom;
-        var expected = new PixelSize(tile * zoom, tile * zoom);
+        var expected = new PixelSize(vw * zoom, vh * zoom);
         if (_canvasBitmap.PixelSize != expected)
         {
             RebuildBitmaps();
@@ -139,26 +149,26 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         var stride = locked.RowBytes;
         var ptr = locked.Address;
 
-        for (var y = 0; y < tile; y++)
-        for (var x = 0; x < tile; x++)
+        for (var y = 0; y < vh; y++)
+        for (var x = 0; x < vw; x++)
         {
             var color = Pico8Colors.ToBgra(Ctrl.GetPixel(x, y), Ctrl.ColorChip);
-            FillPixelBlock(ptr, stride, x, y, zoom, color, tile, tile);
+            FillPixelBlock(ptr, stride, x, y, zoom, color, vw, vh);
         }
 
         if (Ctrl.Selection.HasPixelSelection)
-            DrawSelectionOverlay(ptr, stride, zoom);
+            DrawSelectionOverlay(ptr, stride, zoom, vw, vh);
 
         if (Ctrl.SelectedTool == "stamp" && Ctrl.Clipboard.HasContent && Ctrl.StampPreviewPosition is { } stampPos)
-            DrawStampGhostOverlay(ptr, stride, zoom, tile, stampPos.x, stampPos.y);
+            DrawStampGhostOverlay(ptr, stride, zoom, vw, vh, stampPos.x, stampPos.y);
 
-        if (Ctrl.Viewport.GridVisible && zoom >= 8)
-            DrawGridOverlay(ptr, stride, tile * zoom, zoom);
+        if (Ctrl.Viewport.GridVisible && zoom >= 4)
+            DrawGridOverlay(ptr, stride, vw * zoom, Ctrl.TileSize * zoom);
 
         _canvasImage.InvalidateVisual();
     }
 
-    private void DrawStampGhostOverlay(nint ptr, int stride, int zoom, int tile, int anchorX, int anchorY)
+    private void DrawStampGhostOverlay(nint ptr, int stride, int zoom, int viewW, int viewH, int anchorX, int anchorY)
     {
         var clip = Ctrl.Clipboard;
         if (clip.Pixels == null) return;
@@ -174,23 +184,22 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
 
             var destX = anchorX + x;
             var destY = anchorY + y;
-            if (destX < 0 || destY < 0 || destX >= tile || destY >= tile) continue;
+            if (destX < 0 || destY < 0 || destX >= viewW || destY >= viewH) continue;
 
             var bgra = Pico8Colors.ToBgra(colorIndex, Ctrl.ColorChip);
             var ghost = (bgra & 0x00FFFFFFu) | 0xA0000000u;
-            BlendPixelBlock(ptr, stride, destX, destY, zoom, ghost, tile, tile);
+            BlendPixelBlock(ptr, stride, destX, destY, zoom, ghost, viewW, viewH);
         }
     }
 
-    private void DrawSelectionOverlay(nint ptr, int stride, int zoom)
+    private void DrawSelectionOverlay(nint ptr, int stride, int zoom, int viewW, int viewH)
     {
-        var tile = Ctrl.TileSize;
         var sel = Ctrl.Selection;
         var overlay = 0x80FFFF00u;
-        var left = Math.Clamp(sel.PixelX, 0, tile - 1);
-        var top = Math.Clamp(sel.PixelY, 0, tile - 1);
-        var right = Math.Clamp(sel.PixelX + sel.PixelWidth - 1, 0, tile - 1);
-        var bottom = Math.Clamp(sel.PixelY + sel.PixelHeight - 1, 0, tile - 1);
+        var left = Math.Clamp(sel.PixelX, 0, viewW - 1);
+        var top = Math.Clamp(sel.PixelY, 0, viewH - 1);
+        var right = Math.Clamp(sel.PixelX + sel.PixelWidth - 1, 0, viewW - 1);
+        var bottom = Math.Clamp(sel.PixelY + sel.PixelHeight - 1, 0, viewH - 1);
         for (var y = top; y <= bottom; y++)
         for (var x = left; x <= right; x++)
         {
@@ -203,7 +212,7 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
             {
                 if ((onTop && zy == 0) || (onBottom && zy == zoom - 1) ||
                     (onLeft && zx == 0) || (onRight && zx == zoom - 1))
-                    FillPixelBlock(ptr, stride, x, y, zoom, overlay, tile, tile);
+                    FillPixelBlock(ptr, stride, x, y, zoom, overlay, viewW, viewH);
             }
         }
     }
@@ -225,8 +234,12 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
             FillPixelBlock(ptr, stride, x, y, SheetZoom, color, sw, sh);
         }
 
-        var (ox, oy) = Ctrl.SpriteOrigin;
-        HighlightSpriteRect(ptr, stride, ox, oy, Ctrl.TileSize, SheetZoom, 0xFFFFCC00, sw, sh);
+        var (vx, vy) = Ctrl.Document.ViewOriginSheet;
+        var tile = Ctrl.TileSize;
+        if (Ctrl.ViewWidth > tile || Ctrl.ViewHeight > tile)
+            HighlightRegionRect(ptr, stride, vx, vy, Ctrl.ViewWidth, Ctrl.ViewHeight, SheetZoom, 0xFFFFCC00, sw, sh);
+        else
+            HighlightSpriteRect(ptr, stride, vx, vy, tile, SheetZoom, 0xFFFFCC00, sw, sh);
 
         foreach (var idx in Ctrl.Selection.SpriteIndices)
         {
@@ -282,13 +295,20 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         }
     }
 
-    private static unsafe void HighlightSpriteRect(nint ptr, int stride, int ox, int oy, int tileSize, int zoom, uint highlight, int sheetW, int sheetH)
+    private static unsafe void HighlightSpriteRect(nint ptr, int stride, int ox, int oy, int tileSize, int zoom, uint highlight, int sheetW, int sheetH) =>
+        HighlightRegionRect(ptr, stride, ox, oy, tileSize, tileSize, zoom, highlight, sheetW, sheetH);
+
+    private static unsafe void HighlightRegionRect(nint ptr, int stride, int ox, int oy, int w, int h, int zoom, uint highlight, int sheetW, int sheetH)
     {
-        for (var edge = 0; edge < tileSize; edge++)
-        for (var t = 0; t < tileSize; t++)
+        for (var x = 0; x < w; x++)
         {
-            FillPixelBlock(ptr, stride, ox + t, oy + edge, zoom, highlight, sheetW, sheetH);
-            FillPixelBlock(ptr, stride, ox + edge, oy + t, zoom, highlight, sheetW, sheetH);
+            FillPixelBlock(ptr, stride, ox + x, oy, zoom, highlight, sheetW, sheetH);
+            FillPixelBlock(ptr, stride, ox + x, oy + h - 1, zoom, highlight, sheetW, sheetH);
+        }
+        for (var y = 0; y < h; y++)
+        {
+            FillPixelBlock(ptr, stride, ox, oy + y, zoom, highlight, sheetW, sheetH);
+            FillPixelBlock(ptr, stride, ox + w - 1, oy + y, zoom, highlight, sheetW, sheetH);
         }
     }
 
@@ -321,6 +341,7 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         sheetPanel.Children.Add(new TextBlock { Text = "Sprite Sheet", Foreground = Brushes.LightGray, FontSize = 11 });
         _sheetImage = new Image { Stretch = Stretch.None };
         _sheetImage.PointerPressed += OnSheetPointerPressed;
+        _sheetImage.PointerMoved += OnSheetPointerMoved;
         sheetPanel.Children.Add(new ScrollViewer { MaxHeight = 320, Content = _sheetImage });
 
         var sheetOps = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
@@ -545,16 +566,58 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         var sy = (int)(pt.Y / SheetZoom);
         if (sx < 0 || sy < 0 || sx >= Ctrl.SheetWidth || sy >= Ctrl.SheetHeight) return;
         var mods = e.KeyModifiers;
-        Ctrl.SelectSpriteAtSheet(sx, sy, mods.HasFlag(KeyModifiers.Shift), mods.HasFlag(KeyModifiers.Control));
+        if (mods.HasFlag(KeyModifiers.Shift) && !mods.HasFlag(KeyModifiers.Control))
+        {
+            _sheetDragging = true;
+            _sheetDragStartX = sx;
+            _sheetDragStartY = sy;
+            e.Pointer.Capture(_sheetImage);
+            return;
+        }
+        Ctrl.SelectSpriteAtSheet(sx, sy, false, mods.HasFlag(KeyModifiers.Control));
         RefreshFlagToggles();
         RefreshSheet();
+        RefreshCanvas();
+    }
+
+    private void OnSheetPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_sheetDragging) return;
+        var pt = e.GetPosition(_sheetImage);
+        var sx = Math.Clamp((int)(pt.X / SheetZoom), 0, Ctrl.SheetWidth - 1);
+        var sy = Math.Clamp((int)(pt.Y / SheetZoom), 0, Ctrl.SheetHeight - 1);
+        Ctrl.SelectSpritesInSheetRect(_sheetDragStartX, _sheetDragStartY, sx, sy);
+        RefreshFlagToggles();
+        RefreshSheet();
+        RefreshCanvas();
+    }
+
+    private void EndSheetDrag(int sx, int sy)
+    {
+        if (!_sheetDragging) return;
+        _sheetDragging = false;
+        var tile = Ctrl.TileSize;
+        var sameCell = sx / tile == _sheetDragStartX / tile && sy / tile == _sheetDragStartY / tile;
+        if (sameCell)
+        {
+            var index = (sy / tile) * Ctrl.SpritesPerRow + sx / tile;
+            if (index >= 0 && index < Ctrl.SpriteCount)
+            {
+                Ctrl.Selection.AddSprite(index);
+                Ctrl.UpdateViewRegion();
+            }
+        }
+        RefreshFlagToggles();
+        RefreshSheet();
+        RefreshCanvas();
     }
 
     private PointerInput BuildInput(int x, int y, bool isStart)
     {
-        var tile = Ctrl.TileSize;
-        x = Math.Clamp(x, 0, tile - 1);
-        y = Math.Clamp(y, 0, tile - 1);
+        var vw = Ctrl.ViewWidth;
+        var vh = Ctrl.ViewHeight;
+        x = Math.Clamp(x, 0, vw - 1);
+        y = Math.Clamp(y, 0, vh - 1);
         return new PointerInput
         {
             LocalX = x, LocalY = y, IsStart = isStart,
@@ -630,6 +693,14 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
+        if (_sheetDragging)
+        {
+            var pt = e.GetPosition(_sheetImage);
+            var sx = Math.Clamp((int)(pt.X / SheetZoom), 0, Ctrl.SheetWidth - 1);
+            var sy = Math.Clamp((int)(pt.Y / SheetZoom), 0, Ctrl.SheetHeight - 1);
+            EndSheetDrag(sx, sy);
+            e.Pointer.Capture(null);
+        }
         if (_isDrawing)
         {
             var pt = e.GetPosition(_canvasImage);

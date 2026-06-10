@@ -20,7 +20,7 @@ public sealed class StampTool : ISpriteTool
             if (input.Ctrl && color == transparent) continue;
             var destX = input.LocalX + x;
             var destY = input.LocalY + y;
-            if (destX >= 0 && destY >= 0 && destX < ctx.Document.TileSize && destY < ctx.Document.TileSize)
+            if (destX >= 0 && destY >= 0 && destX < ctx.Document.ViewWidth && destY < ctx.Document.ViewHeight)
                 ctx.Document.SetLocalPixel(destX, destY, color);
         }
 

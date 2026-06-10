@@ -105,39 +105,26 @@ public sealed class LocalRegionCommand : IUndoCommand
 public sealed class DrawStrokeCommand : IUndoCommand
 {
     private readonly SpriteDocument _doc;
-    private readonly int _spriteIndex;
     private readonly byte[] _before;
     private byte[] _after;
-    private readonly int _beforeFlags;
-    private int _afterFlags;
     public string Name => "draw";
 
-    public DrawStrokeCommand(SpriteDocument doc, int spriteIndex)
+    public DrawStrokeCommand(SpriteDocument doc)
     {
         _doc = doc;
-        _spriteIndex = spriteIndex;
-        _before = doc.GetSpritePixels(spriteIndex);
-        _beforeFlags = doc.GetFlags(spriteIndex);
+        _before = doc.ReadViewPixels();
         _after = (byte[])_before.Clone();
-        _afterFlags = _beforeFlags;
     }
 
     public void CaptureAfter()
     {
-        var current = _doc.GetSpritePixels(_spriteIndex);
-        Array.Copy(current, _after, current.Length);
-        _afterFlags = _doc.GetFlags(_spriteIndex);
+        var current = _doc.ReadViewPixels();
+        if (current.Length == _after.Length)
+            Array.Copy(current, _after, current.Length);
+        else
+            _after = current;
     }
 
-    public void Execute()
-    {
-        _doc.SetSpritePixels(_spriteIndex, _after);
-        _doc.SetFlags(_spriteIndex, _afterFlags);
-    }
-
-    public void Undo()
-    {
-        _doc.SetSpritePixels(_spriteIndex, _before);
-        _doc.SetFlags(_spriteIndex, _beforeFlags);
-    }
+    public void Execute() => _doc.WriteViewPixels(_after);
+    public void Undo() => _doc.WriteViewPixels(_before);
 }

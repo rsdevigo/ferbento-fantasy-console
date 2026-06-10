@@ -6,8 +6,16 @@ public static class PixelDrawing
     {
         if (selection?.HasPixelSelection == true && !selection.ContainsLocalPixel(localX, localY))
             return;
-        if (localX >= 0 && localY >= 0 && localX < doc.TileSize && localY < doc.TileSize)
+        if (localX >= 0 && localY >= 0 && localX < doc.ViewWidth && localY < doc.ViewHeight)
             doc.SetLocalPixel(localX, localY, color);
+    }
+
+    public static void PaintBrush(SpriteDocument doc, int localX, int localY, int color, int brushSize, Selection? selection = null)
+    {
+        var size = Math.Clamp(brushSize, 1, 8);
+        for (var dy = 0; dy < size; dy++)
+        for (var dx = 0; dx < size; dx++)
+            SetPixelSafe(doc, localX + dx, localY + dy, color, selection);
     }
 
     public static void DrawLine(SpriteDocument doc, int x0, int y0, int x1, int y1, int color, Selection? selection = null)
@@ -130,12 +138,13 @@ public static class PixelDrawing
 
         var stack = new Stack<(int x, int y)>();
         stack.Push((localX, localY));
-        var tile = doc.TileSize;
+        var w = doc.ViewWidth;
+        var h = doc.ViewHeight;
 
         while (stack.Count > 0)
         {
             var (x, y) = stack.Pop();
-            if (x < 0 || x >= tile || y < 0 || y >= tile) continue;
+            if (x < 0 || x >= w || y < 0 || y >= h) continue;
             if (selection?.HasPixelSelection == true && !selection.ContainsLocalPixel(x, y)) continue;
             if (doc.GetLocalPixel(x, y) != target) continue;
             doc.SetLocalPixel(x, y, newColor);
@@ -146,9 +155,24 @@ public static class PixelDrawing
         }
     }
 
-    public static void InterpolateStroke(SpriteDocument doc, int fromX, int fromY, int toX, int toY, int color, Selection? selection = null)
+    public static void InterpolateStroke(SpriteDocument doc, int fromX, int fromY, int toX, int toY, int color, Selection? selection = null, int brushSize = 1)
     {
-        DrawLine(doc, fromX, fromY, toX, toY, color, selection);
+        var dx = Math.Abs(toX - fromX);
+        var dy = Math.Abs(toY - fromY);
+        var sx = fromX < toX ? 1 : -1;
+        var sy = fromY < toY ? 1 : -1;
+        var err = dx - dy;
+        var x = fromX;
+        var y = fromY;
+
+        while (true)
+        {
+            PaintBrush(doc, x, y, color, brushSize, selection);
+            if (x == toX && y == toY) break;
+            var e2 = 2 * err;
+            if (e2 > -dy) { err -= dy; x += sx; }
+            if (e2 < dx) { err += dx; y += sy; }
+        }
     }
 
     public static byte[] FlipHorizontal(byte[] data, int tileSize)
@@ -210,9 +234,8 @@ public static class PixelDrawing
 
     public static void ReplaceColor(SpriteDocument doc, int oldColor, int newColor, Selection? selection = null)
     {
-        var tile = doc.TileSize;
-        for (var y = 0; y < tile; y++)
-        for (var x = 0; x < tile; x++)
+        for (var y = 0; y < doc.ViewHeight; y++)
+        for (var x = 0; x < doc.ViewWidth; x++)
         {
             if (selection?.HasPixelSelection == true && !selection.ContainsLocalPixel(x, y)) continue;
             if (doc.GetLocalPixel(x, y) == oldColor)

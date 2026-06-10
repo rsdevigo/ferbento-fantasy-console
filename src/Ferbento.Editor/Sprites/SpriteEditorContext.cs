@@ -25,6 +25,7 @@ public sealed class SpriteEditorContext
     public (int x, int y)? MoveSelectionOffset { get; set; }
     public (int x, int y)? StampPreviewPosition { get; set; }
     public bool StampPreviewSkipTransparent { get; set; }
+    public int BrushSize { get; set; } = 1;
 
     public int DrawColor(PointerInput input) =>
         input.IsRightButton ? Palette.SecondaryColor : Palette.PrimaryColor;
@@ -38,7 +39,7 @@ public sealed class SpriteEditorContext
     public void BeginStroke()
     {
         if (ActiveStroke != null) return;
-        ActiveStroke = new DrawStrokeCommand(Document, Document.CurrentSpriteIndex);
+        ActiveStroke = new DrawStrokeCommand(Document);
         Undo.PushExecuted(ActiveStroke);
     }
 

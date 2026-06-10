@@ -6,13 +6,11 @@ public sealed class FillTool : ISpriteTool
 
     public void OnPointerDown(SpriteEditorContext ctx, PointerInput input)
     {
-        var before = ctx.Document.GetCurrentSpritePixels();
-        var beforeFlags = ctx.Document.GetCurrentFlags();
+        var before = ctx.Document.ReadViewPixels();
         PixelDrawing.FloodFill(ctx.Document, input.LocalX, input.LocalY, ctx.DrawColor(input), ctx.Selection);
-        var after = ctx.Document.GetCurrentSpritePixels();
-        ctx.Undo.Execute(new Undo.SpritePatchCommand(
-            ctx.Document, ctx.Document.CurrentSpriteIndex, "fill",
-            before, after, beforeFlags, beforeFlags));
+        var after = ctx.Document.ReadViewPixels();
+        ctx.Undo.Execute(new Undo.LocalRegionCommand(
+            ctx.Document, "fill", 0, 0, ctx.Document.ViewWidth, ctx.Document.ViewHeight, before, after));
         ctx.MarkEdited();
     }
 

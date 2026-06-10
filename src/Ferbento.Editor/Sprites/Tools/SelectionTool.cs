@@ -42,11 +42,12 @@ public sealed class SelectionTool : ISpriteTool
     {
         if (ctx.SelectDragStart is { } start)
         {
-            var tile = ctx.Document.TileSize;
-            var left = Math.Clamp(Math.Min(start.x, input.LocalX), 0, tile - 1);
-            var top = Math.Clamp(Math.Min(start.y, input.LocalY), 0, tile - 1);
-            var right = Math.Clamp(Math.Max(start.x, input.LocalX), 0, tile - 1);
-            var bottom = Math.Clamp(Math.Max(start.y, input.LocalY), 0, tile - 1);
+            var vw = ctx.Document.ViewWidth;
+            var vh = ctx.Document.ViewHeight;
+            var left = Math.Clamp(Math.Min(start.x, input.LocalX), 0, vw - 1);
+            var top = Math.Clamp(Math.Min(start.y, input.LocalY), 0, vh - 1);
+            var right = Math.Clamp(Math.Max(start.x, input.LocalX), 0, vw - 1);
+            var bottom = Math.Clamp(Math.Max(start.y, input.LocalY), 0, vh - 1);
             var w = right - left + 1;
             var h = bottom - top + 1;
             var buf = ctx.Document.ReadLocalRegion(left, top, w, h);
@@ -68,7 +69,8 @@ public sealed class SelectionTool : ISpriteTool
 
         if (ctx.IsMovingSelection && ctx.Selection.PixelBuffer != null)
         {
-            var tile = ctx.Document.TileSize;
+            var vw = ctx.Document.ViewWidth;
+            var vh = ctx.Document.ViewHeight;
             var destX = ctx.Selection.PixelX;
             var destY = ctx.Selection.PixelY;
             var w = ctx.Selection.PixelWidth;
@@ -88,7 +90,7 @@ public sealed class SelectionTool : ISpriteTool
             {
                 var lx = destX + col;
                 var ly = destY + row;
-                if (lx >= 0 && lx < tile && ly >= 0 && ly < tile)
+                if (lx >= 0 && lx < vw && ly >= 0 && ly < vh)
                     ctx.Document.SetLocalPixel(lx, ly, ctx.Selection.PixelBuffer[row * w + col]);
             }
 

@@ -8,6 +8,10 @@ public sealed class SpriteDocument
     private ChipBus? _bus;
     private HardwareProfile _profile = HardwareProfile.Pico8();
     private int _currentSpriteIndex;
+    private int _viewOriginSheetX;
+    private int _viewOriginSheetY;
+    private int _viewWidth = 8;
+    private int _viewHeight = 8;
 
     public int TileSize => _bus?.Sprite.TileSize ?? _profile.Sprites.TileSize;
     public int SheetWidth => _bus?.Sprite.SheetWidth ?? _profile.Sprites.SheetWidth;
@@ -17,6 +21,9 @@ public sealed class SpriteDocument
     public int PaletteCount => _bus?.Color.ColorCount ?? _profile.Palette.Colors;
     public bool UsesGfx2Bank => _bus?.Sprite.UsesGfx2Bank ?? false;
     public ColorChip? ColorChip => _bus?.Color;
+    public int ViewWidth => _viewWidth;
+    public int ViewHeight => _viewHeight;
+    public (int sheetX, int sheetY) ViewOriginSheet => (_viewOriginSheetX, _viewOriginSheetY);
 
     public int CurrentSpriteIndex
     {
@@ -58,6 +65,30 @@ public sealed class SpriteDocument
 
     public void SetChipBus(ChipBus bus) => _bus = bus;
 
+    public void SetViewRegion(int sheetX, int sheetY, int width, int height)
+    {
+        _viewOriginSheetX = Math.Max(0, sheetX);
+        _viewOriginSheetY = Math.Max(0, sheetY);
+        _viewWidth = Math.Max(TileSize, width);
+        _viewHeight = Math.Max(TileSize, height);
+        if (_bus != null)
+        {
+            _viewWidth = Math.Min(_viewWidth, SheetWidth - _viewOriginSheetX);
+            _viewHeight = Math.Min(_viewHeight, SheetHeight - _viewOriginSheetY);
+        }
+    }
+
+    public void ResetViewToCurrentSprite()
+    {
+        var (ox, oy) = SpriteOrigin;
+        SetViewRegion(ox, oy, TileSize, TileSize);
+    }
+
+    public byte[] ReadViewPixels() => ReadRegion(_viewOriginSheetX, _viewOriginSheetY, _viewWidth, _viewHeight);
+
+    public void WriteViewPixels(byte[] data) =>
+        WriteRegion(_viewOriginSheetX, _viewOriginSheetY, _viewWidth, _viewHeight, data);
+
     public int GetPixel(int sheetX, int sheetY)
     {
         if (_bus == null || sheetX < 0 || sheetY < 0 || sheetX >= SheetWidth || sheetY >= SheetHeight)
@@ -74,16 +105,14 @@ public sealed class SpriteDocument
 
     public int GetLocalPixel(int localX, int localY)
     {
-        if (localX < 0 || localY < 0 || localX >= TileSize || localY >= TileSize) return 0;
-        var (ox, oy) = SpriteOrigin;
-        return GetPixel(ox + localX, oy + localY);
+        if (localX < 0 || localY < 0 || localX >= _viewWidth || localY >= _viewHeight) return 0;
+        return GetPixel(_viewOriginSheetX + localX, _viewOriginSheetY + localY);
     }
 
     public void SetLocalPixel(int localX, int localY, int color)
     {
-        if (_bus == null || localX < 0 || localY < 0 || localX >= TileSize || localY >= TileSize) return;
-        var (ox, oy) = SpriteOrigin;
-        SetPixel(ox + localX, oy + localY, color);
+        if (_bus == null || localX < 0 || localY < 0 || localX >= _viewWidth || localY >= _viewHeight) return;
+        SetPixel(_viewOriginSheetX + localX, _viewOriginSheetY + localY, color);
     }
 
     public byte[] GetSpritePixels(int spriteIndex)
@@ -147,17 +176,11 @@ public sealed class SpriteDocument
         }
     }
 
-    public byte[] ReadLocalRegion(int localX, int localY, int width, int height)
-    {
-        var (ox, oy) = SpriteOrigin;
-        return ReadRegion(ox + localX, oy + localY, width, height);
-    }
+    public byte[] ReadLocalRegion(int localX, int localY, int width, int height) =>
+        ReadRegion(_viewOriginSheetX + localX, _viewOriginSheetY + localY, width, height);
 
-    public void WriteLocalRegion(int localX, int localY, int width, int height, byte[] data)
-    {
-        var (ox, oy) = SpriteOrigin;
-        WriteRegion(ox + localX, oy + localY, width, height, data);
-    }
+    public void WriteLocalRegion(int localX, int localY, int width, int height, byte[] data) =>
+        WriteRegion(_viewOriginSheetX + localX, _viewOriginSheetY + localY, width, height, data);
 
     public int FindNextFreeSpriteIndex(int startAfter = -1)
     {
