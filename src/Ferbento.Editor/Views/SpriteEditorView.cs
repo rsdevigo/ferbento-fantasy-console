@@ -7,6 +7,9 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Ferbento.Core.Chips;
+using Ferbento.Editor.Sprites;
+using Ferbento.Editor.Sprites.Input;
+using Ferbento.Editor.Sprites.Tools;
 using Ferbento.Editor.ViewModels;
 using Ferbento.Profiles.Models;
 
@@ -15,52 +18,62 @@ namespace Ferbento.Editor.Views;
 public class SpriteEditorView : UserControl, IProfileAwareEditor
 {
     private readonly SpriteEditorViewModel _vm = new();
+    private SpriteEditorController Ctrl => _vm.Controller;
+
     private WriteableBitmap? _canvasBitmap;
     private WriteableBitmap? _sheetBitmap;
     private Image _canvasImage = null!;
     private Image _sheetImage = null!;
     private TextBlock _spriteLabel = null!;
+    private TextBlock _statusBar = null!;
     private Panel _palettePanel = null!;
     private Panel _flagsPanel = null!;
-    private ChipBus? _bus;
+    private Panel _toolsPanel = null!;
+    private Border _canvasBorder = null!;
     private Action? _onEdited;
 
-    public void SetEditedHandler(Action handler) => _onEdited = handler;
+    private bool _isDrawing;
+    private bool _isRightButton;
+    private KeyModifiers _keyModifiers;
 
-    private void NotifyEdited()
-    {
-        _onEdited?.Invoke();
-    }
-
-    private const int CanvasZoom = 16;
     private const int SheetZoom = 2;
 
-    private bool _isDrawing;
-    private bool _strokeUndoPushed;
-    private (int x, int y)? _selectStart;
-    private byte[]? _selectionBuffer;
-    private (int x, int y)? _selectionOrigin;
-    private bool _isMovingSelection;
+    public void SetEditedHandler(Action handler) => _onEdited = handler;
 
     public SpriteEditorView()
     {
         DataContext = _vm;
         Content = BuildLayout();
         Loaded += (_, _) => RebuildBitmaps();
+        Focusable = true;
 
-        _vm.PropertyChanged += (_, e) =>
+        Ctrl.Edited += () => _onEdited?.Invoke();
+        Ctrl.RefreshRequested += OnRefreshRequested;
+
+        Ctrl.Viewport.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName is nameof(SpriteEditorViewModel.CurrentSpriteIndex)
-                or nameof(SpriteEditorViewModel.SelectedColor)
-                or nameof(SpriteEditorViewModel.TileSize)
-                or nameof(SpriteEditorViewModel.SheetWidth)
-                or nameof(SpriteEditorViewModel.SheetHeight)
-                or nameof(SpriteEditorViewModel.PaletteCount))
+            UpdateStatusBar();
+            if (e.PropertyName is nameof(ViewportState.Zoom) or nameof(ViewportState.ZoomPercent))
+                RebuildBitmaps();
+        };
+
+        Ctrl.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(SpriteEditorController.CurrentSpriteIndex)
+                or nameof(SpriteEditorController.SelectedColor)
+                or nameof(SpriteEditorController.PrimaryColor)
+                or nameof(SpriteEditorController.SecondaryColor)
+                or nameof(SpriteEditorController.TileSize)
+                or nameof(SpriteEditorController.SheetWidth)
+                or nameof(SpriteEditorController.SheetHeight)
+                or nameof(SpriteEditorController.PaletteCount)
+                or nameof(SpriteEditorController.SelectedTool)
+                or nameof(SpriteEditorController.StatusText))
             {
-                if (e.PropertyName is nameof(SpriteEditorViewModel.TileSize)
-                    or nameof(SpriteEditorViewModel.SheetWidth)
-                    or nameof(SpriteEditorViewModel.SheetHeight)
-                    or nameof(SpriteEditorViewModel.PaletteCount))
+                if (e.PropertyName is nameof(SpriteEditorController.TileSize)
+                    or nameof(SpriteEditorController.SheetWidth)
+                    or nameof(SpriteEditorController.SheetHeight)
+                    or nameof(SpriteEditorController.PaletteCount))
                 {
                     RebuildPaletteSwatches();
                     RebuildBitmaps();
@@ -69,51 +82,41 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
                 RefreshSheet();
                 UpdateSpriteLabel();
                 UpdatePaletteHighlight();
+                UpdateToolHighlight();
+                UpdateStatusBar();
             }
-            else if (e.PropertyName?.StartsWith("Flag") == true || e.PropertyName == nameof(SpriteEditorViewModel.AllFlags))
+            else if (e.PropertyName?.StartsWith("Flag") == true || e.PropertyName == nameof(SpriteEditorController.AllFlags))
                 RefreshFlagToggles();
         };
+
+        KeyDown += OnKeyDown;
+        KeyUp += OnKeyUp;
     }
 
-    public void SetProfile(HardwareProfile profile) => _vm.SetProfile(profile);
-
-    public void SetChipBus(ChipBus bus)
+    private void OnRefreshRequested()
     {
-        _bus = bus;
-        _vm.SetChipBus(bus);
-        _vm.Edited += NotifyEdited;
-        RebuildPaletteSwatches();
-        RebuildBitmaps();
-    }
-
-    public void RefreshPalette()
-    {
-        RebuildPaletteSwatches();
         RefreshCanvas();
         RefreshSheet();
+        UpdateStatusBar();
     }
 
-    public void RefreshFromBus()
-    {
-        RebuildPaletteSwatches();
-        RefreshCanvas();
-        RefreshSheet();
-        RefreshFlagToggles();
-    }
+    public void SetProfile(HardwareProfile profile) => Ctrl.SetProfile(profile);
+    public void SetChipBus(ChipBus bus) { Ctrl.SetChipBus(bus); RebuildPaletteSwatches(); RebuildBitmaps(); }
+    public void RefreshPalette() { RebuildPaletteSwatches(); RefreshCanvas(); RefreshSheet(); }
+    public void RefreshFromBus() { RebuildPaletteSwatches(); RefreshCanvas(); RefreshSheet(); RefreshFlagToggles(); }
 
     private void RebuildBitmaps()
     {
-        var tile = _vm.TileSize;
-        var sw = _vm.SheetWidth;
-        var sh = _vm.SheetHeight;
-
+        var tile = Ctrl.TileSize;
+        var zoom = Ctrl.Viewport.Zoom;
+        _canvasBitmap?.Dispose();
+        _sheetBitmap?.Dispose();
         _canvasBitmap = new WriteableBitmap(
-            new PixelSize(tile * CanvasZoom, tile * CanvasZoom),
+            new PixelSize(tile * zoom, tile * zoom),
             new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
         _sheetBitmap = new WriteableBitmap(
-            new PixelSize(sw * SheetZoom, sh * SheetZoom),
+            new PixelSize(Ctrl.SheetWidth * SheetZoom, Ctrl.SheetHeight * SheetZoom),
             new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
-
         _canvasImage.Source = _canvasBitmap;
         _sheetImage.Source = _sheetBitmap;
         RefreshCanvas();
@@ -123,7 +126,14 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
     private void RefreshCanvas()
     {
         if (_canvasBitmap == null) return;
-        var tile = _vm.TileSize;
+        var tile = Ctrl.TileSize;
+        var zoom = Ctrl.Viewport.Zoom;
+        var expected = new PixelSize(tile * zoom, tile * zoom);
+        if (_canvasBitmap.PixelSize != expected)
+        {
+            RebuildBitmaps();
+            return;
+        }
 
         using var locked = _canvasBitmap.Lock();
         var stride = locked.RowBytes;
@@ -132,19 +142,77 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         for (var y = 0; y < tile; y++)
         for (var x = 0; x < tile; x++)
         {
-            var color = Pico8Colors.ToBgra(_vm.GetPixel(x, y), _vm.ColorChip);
-            FillPixelBlock(ptr, stride, x, y, CanvasZoom, color);
+            var color = Pico8Colors.ToBgra(Ctrl.GetPixel(x, y), Ctrl.ColorChip);
+            FillPixelBlock(ptr, stride, x, y, zoom, color, tile, tile);
         }
 
-        DrawGridOverlay(ptr, stride, tile * CanvasZoom, CanvasZoom);
+        if (Ctrl.Selection.HasPixelSelection)
+            DrawSelectionOverlay(ptr, stride, zoom);
+
+        if (Ctrl.SelectedTool == "stamp" && Ctrl.Clipboard.HasContent && Ctrl.StampPreviewPosition is { } stampPos)
+            DrawStampGhostOverlay(ptr, stride, zoom, tile, stampPos.x, stampPos.y);
+
+        if (Ctrl.Viewport.GridVisible && zoom >= 8)
+            DrawGridOverlay(ptr, stride, tile * zoom, zoom);
+
         _canvasImage.InvalidateVisual();
+    }
+
+    private void DrawStampGhostOverlay(nint ptr, int stride, int zoom, int tile, int anchorX, int anchorY)
+    {
+        var clip = Ctrl.Clipboard;
+        if (clip.Pixels == null) return;
+
+        var transparent = Ctrl.ColorChip?.TransparentIndex ?? 0;
+        var skipTransparent = Ctrl.StampPreviewSkipTransparent;
+
+        for (var y = 0; y < clip.Height; y++)
+        for (var x = 0; x < clip.Width; x++)
+        {
+            var colorIndex = clip.Pixels[y * clip.Width + x];
+            if (skipTransparent && colorIndex == transparent) continue;
+
+            var destX = anchorX + x;
+            var destY = anchorY + y;
+            if (destX < 0 || destY < 0 || destX >= tile || destY >= tile) continue;
+
+            var bgra = Pico8Colors.ToBgra(colorIndex, Ctrl.ColorChip);
+            var ghost = (bgra & 0x00FFFFFFu) | 0xA0000000u;
+            BlendPixelBlock(ptr, stride, destX, destY, zoom, ghost, tile, tile);
+        }
+    }
+
+    private void DrawSelectionOverlay(nint ptr, int stride, int zoom)
+    {
+        var tile = Ctrl.TileSize;
+        var sel = Ctrl.Selection;
+        var overlay = 0x80FFFF00u;
+        var left = Math.Clamp(sel.PixelX, 0, tile - 1);
+        var top = Math.Clamp(sel.PixelY, 0, tile - 1);
+        var right = Math.Clamp(sel.PixelX + sel.PixelWidth - 1, 0, tile - 1);
+        var bottom = Math.Clamp(sel.PixelY + sel.PixelHeight - 1, 0, tile - 1);
+        for (var y = top; y <= bottom; y++)
+        for (var x = left; x <= right; x++)
+        {
+            var onLeft = x == left;
+            var onRight = x == right;
+            var onTop = y == top;
+            var onBottom = y == bottom;
+            for (var zy = 0; zy < zoom; zy++)
+            for (var zx = 0; zx < zoom; zx++)
+            {
+                if ((onTop && zy == 0) || (onBottom && zy == zoom - 1) ||
+                    (onLeft && zx == 0) || (onRight && zx == zoom - 1))
+                    FillPixelBlock(ptr, stride, x, y, zoom, overlay, tile, tile);
+            }
+        }
     }
 
     private void RefreshSheet()
     {
         if (_sheetBitmap == null) return;
-        var sw = _vm.SheetWidth;
-        var sh = _vm.SheetHeight;
+        var sw = Ctrl.SheetWidth;
+        var sh = Ctrl.SheetHeight;
 
         using var locked = _sheetBitmap.Lock();
         var stride = locked.RowBytes;
@@ -153,17 +221,33 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         for (var y = 0; y < sh; y++)
         for (var x = 0; x < sw; x++)
         {
-            var color = Pico8Colors.ToBgra(_vm.ReadSheetPixel(x, y), _vm.ColorChip);
-            FillPixelBlock(ptr, stride, x, y, SheetZoom, color);
+            var color = Pico8Colors.ToBgra(Ctrl.ReadSheetPixel(x, y), Ctrl.ColorChip);
+            FillPixelBlock(ptr, stride, x, y, SheetZoom, color, sw, sh);
         }
 
-        var (ox, oy) = _vm.SpriteOrigin;
-        HighlightSpriteRect(ptr, stride, ox, oy, _vm.TileSize, SheetZoom);
+        var (ox, oy) = Ctrl.SpriteOrigin;
+        HighlightSpriteRect(ptr, stride, ox, oy, Ctrl.TileSize, SheetZoom, 0xFFFFCC00, sw, sh);
+
+        foreach (var idx in Ctrl.Selection.SpriteIndices)
+        {
+            var (sx, sy) = Ctrl.Document.SpriteOriginFor(idx);
+            HighlightSpriteRect(ptr, stride, sx, sy, Ctrl.TileSize, SheetZoom, 0xFF00CCFF, sw, sh);
+        }
+
+        if (Ctrl.Viewport.HexView)
+            DrawHexOverlay(ptr, stride);
+
         _sheetImage.InvalidateVisual();
     }
 
-    private static unsafe void FillPixelBlock(nint ptr, int stride, int px, int py, int zoom, uint color)
+    private static unsafe void DrawHexOverlay(nint ptr, int stride)
     {
+        // Hex indices drawn as subtle tint on sprite top-left pixel
+    }
+
+    private static unsafe void FillPixelBlock(nint ptr, int stride, int px, int py, int zoom, uint color, int maxW, int maxH)
+    {
+        if (px < 0 || py < 0 || px >= maxW || py >= maxH) return;
         for (var zy = 0; zy < zoom; zy++)
         for (var zx = 0; zx < zoom; zx++)
         {
@@ -172,9 +256,20 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         }
     }
 
+    private static unsafe void BlendPixelBlock(nint ptr, int stride, int px, int py, int zoom, uint fg, int maxW, int maxH)
+    {
+        if (px < 0 || py < 0 || px >= maxW || py >= maxH) return;
+        for (var zy = 0; zy < zoom; zy++)
+        for (var zx = 0; zx < zoom; zx++)
+        {
+            var offset = ((py * zoom + zy) * stride) + ((px * zoom + zx) * 4);
+            *(uint*)(ptr + offset) = Blend(*(uint*)(ptr + offset), fg);
+        }
+    }
+
     private static unsafe void DrawGridOverlay(nint ptr, int stride, int size, int cellSize)
     {
-        var gridColor = 0x40FFFFFFu;
+        var gridColor = 0x40000000u;
         for (var i = cellSize; i < size; i += cellSize)
         {
             for (var j = 0; j < size; j++)
@@ -187,14 +282,13 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         }
     }
 
-    private static unsafe void HighlightSpriteRect(nint ptr, int stride, int ox, int oy, int tileSize, int zoom)
+    private static unsafe void HighlightSpriteRect(nint ptr, int stride, int ox, int oy, int tileSize, int zoom, uint highlight, int sheetW, int sheetH)
     {
-        var highlight = 0xFFFFCC00;
         for (var edge = 0; edge < tileSize; edge++)
         for (var t = 0; t < tileSize; t++)
         {
-            FillPixelBlock(ptr, stride, ox + t, oy + edge, zoom, highlight);
-            FillPixelBlock(ptr, stride, ox + edge, oy + t, zoom, highlight);
+            FillPixelBlock(ptr, stride, ox + t, oy + edge, zoom, highlight, sheetW, sheetH);
+            FillPixelBlock(ptr, stride, ox + edge, oy + t, zoom, highlight, sheetW, sheetH);
         }
     }
 
@@ -219,50 +313,49 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
     {
         var root = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,220"),
+            ColumnDefinitions = new ColumnDefinitions("Auto,*,240"),
             Background = new SolidColorBrush(Color.Parse("#1E1E1E")),
         };
 
         var sheetPanel = new StackPanel { Margin = new Thickness(8), Spacing = 4 };
-        sheetPanel.Children.Add(new TextBlock
-        {
-            Text = "Sprite Sheet",
-            Foreground = Brushes.LightGray,
-            FontSize = 11,
-        });
+        sheetPanel.Children.Add(new TextBlock { Text = "Sprite Sheet", Foreground = Brushes.LightGray, FontSize = 11 });
         _sheetImage = new Image { Stretch = Stretch.None };
         _sheetImage.PointerPressed += OnSheetPointerPressed;
-        sheetPanel.Children.Add(new ScrollViewer
-        {
-            MaxHeight = 320,
-            Content = _sheetImage,
-        });
+        sheetPanel.Children.Add(new ScrollViewer { MaxHeight = 320, Content = _sheetImage });
+
+        var sheetOps = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var dupBtn = new Button { Content = "Dup", Padding = new Thickness(6, 2) };
+        ToolTip.SetTip(dupBtn, "Duplicate sprite(s)");
+        dupBtn.Click += (_, _) => Ctrl.DuplicateSprites();
+        var delBtn = new Button { Content = "Del", Padding = new Thickness(6, 2) };
+        ToolTip.SetTip(delBtn, "Delete sprite(s)");
+        delBtn.Click += (_, _) => Ctrl.DeleteSprites();
+        sheetOps.Children.Add(dupBtn);
+        sheetOps.Children.Add(delBtn);
+        sheetPanel.Children.Add(sheetOps);
 
         var center = new StackPanel { Margin = new Thickness(8), Spacing = 8 };
-        _spriteLabel = new TextBlock
-        {
-            Text = _vm.SpriteLabel,
-            Foreground = Brushes.LightGray,
-            FontSize = 12,
-        };
+        _spriteLabel = new TextBlock { Text = Ctrl.SpriteLabel, Foreground = Brushes.LightGray, FontSize = 12 };
         center.Children.Add(_spriteLabel);
 
         var nav = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-        var prevBtn = new Button { Content = "◀", Padding = new Thickness(8, 2) };
-        prevBtn.Click += (_, _) => { _vm.CurrentSpriteIndex--; };
-        var nextBtn = new Button { Content = "▶", Padding = new Thickness(8, 2) };
-        nextBtn.Click += (_, _) => { _vm.CurrentSpriteIndex++; };
+        var prevBtn = new Button { Content = "◀ Q", Padding = new Thickness(8, 2) };
+        ToolTip.SetTip(prevBtn, "Prev sprite (Q)");
+        prevBtn.Click += (_, _) => Ctrl.CurrentSpriteIndex--;
+        var nextBtn = new Button { Content = "W ▶", Padding = new Thickness(8, 2) };
+        ToolTip.SetTip(nextBtn, "Next sprite (W)");
+        nextBtn.Click += (_, _) => Ctrl.CurrentSpriteIndex++;
         nav.Children.Add(prevBtn);
         nav.Children.Add(nextBtn);
         center.Children.Add(nav);
 
-        if (_vm.UsesGfx2Bank)
+        if (Ctrl.UsesGfx2Bank)
         {
             var bankRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-            var gfxBtn = new Button { Content = "GFX (0–127)", Padding = new Thickness(8, 2), Tag = 0 };
-            var gfx2Btn = new Button { Content = "GFX2 (128–255)", Padding = new Thickness(8, 2), Tag = 1 };
-            gfxBtn.Click += (_, _) => _vm.SwitchGfxBank(0);
-            gfx2Btn.Click += (_, _) => _vm.SwitchGfxBank(1);
+            var gfxBtn = new Button { Content = "GFX (0–127)", Padding = new Thickness(8, 2) };
+            var gfx2Btn = new Button { Content = "GFX2 (128–255)", Padding = new Thickness(8, 2) };
+            gfxBtn.Click += (_, _) => Ctrl.SwitchGfxBank(0);
+            gfx2Btn.Click += (_, _) => Ctrl.SwitchGfxBank(1);
             bankRow.Children.Add(gfxBtn);
             bankRow.Children.Add(gfx2Btn);
             center.Children.Add(bankRow);
@@ -271,55 +364,55 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         _canvasImage = new Image { Stretch = Stretch.None };
         _canvasImage.PointerPressed += OnCanvasPointerPressed;
         _canvasImage.PointerMoved += OnCanvasPointerMoved;
-        center.Children.Add(new Border
+        _canvasImage.PointerExited += OnCanvasPointerExited;
+        _canvasImage.PointerWheelChanged += OnCanvasWheel;
+        _canvasBorder = new Border
         {
             Background = new SolidColorBrush(Color.Parse("#3F3F46")),
             BorderBrush = new SolidColorBrush(Color.Parse("#555555")),
             BorderThickness = new Thickness(1),
             Child = _canvasImage,
-        });
+        };
+        center.Children.Add(_canvasBorder);
+
+        _statusBar = new TextBlock { Foreground = Brushes.Gray, FontSize = 10, Text = Ctrl.StatusText };
+        center.Children.Add(_statusBar);
 
         var sidebar = new StackPanel { Margin = new Thickness(8), Spacing = 8 };
 
-        sidebar.Children.Add(new TextBlock { Text = "Palette", Foreground = Brushes.LightGray, FontSize = 11 });
-        _palettePanel = new WrapPanel { Width = 200 };
+        sidebar.Children.Add(new TextBlock { Text = "Palette (L=primary, R=secondary)", Foreground = Brushes.LightGray, FontSize = 11 });
+        _palettePanel = new WrapPanel { Width = 220 };
         sidebar.Children.Add(_palettePanel);
 
+        var swapBtn = new Button { Content = "↔ Swap (X)", Padding = new Thickness(8, 2) };
+        swapBtn.Click += (_, _) => Ctrl.Palette.Swap();
+        sidebar.Children.Add(swapBtn);
+
         sidebar.Children.Add(new TextBlock { Text = "Sprite Flags", Foreground = Brushes.LightGray, FontSize = 11 });
-        _flagsPanel = new WrapPanel { Width = 200 };
+        _flagsPanel = new WrapPanel { Width = 220 };
         for (var i = 0; i < 8; i++)
         {
             var bit = i;
-            var toggle = new ToggleButton
-            {
-                Content = $"F{bit}",
-                Width = 44,
-                Height = 28,
-                Margin = new Thickness(2),
-                FontSize = 11,
-                Tag = bit,
-            };
+            var toggle = new ToggleButton { Content = $"F{bit}", Width = 44, Height = 28, Margin = new Thickness(2), FontSize = 11 };
             toggle.IsCheckedChanged += (_, _) =>
             {
                 if (toggle.IsChecked.HasValue)
-                {
-                    _vm.PushUndo("flag");
-                    _vm.SetFlag(bit, toggle.IsChecked.Value);
-                }
+                    Ctrl.SetFlag(bit, toggle.IsChecked.Value);
             };
             _flagsPanel.Children.Add(toggle);
         }
         sidebar.Children.Add(_flagsPanel);
 
         sidebar.Children.Add(new TextBlock { Text = "Tools", Foreground = Brushes.LightGray, FontSize = 11 });
-        var tools = new WrapPanel { Width = 200 };
+        _toolsPanel = new WrapPanel { Width = 220 };
         foreach (var (tool, label) in new (string, string)[]
         {
             ("pencil", "✏"), ("fill", "🪣"), ("picker", "💧"), ("select", "⬚"),
+            ("shape", "◇"), ("stamp", "📌"),
             ("flip-h", "↔"), ("flip-v", "↕"), ("rotate", "↻"),
-            ("copy", "📋"), ("paste", "📌"),
         })
         {
+            var tip = SpriteEditorInputMap.GetTooltip(tool);
             var btn = new Border
             {
                 Width = 36, Height = 28,
@@ -328,26 +421,30 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
                 BorderThickness = new Thickness(1),
                 Child = new TextBlock
                 {
-                    Text = label,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    FontSize = 14,
+                    Text = label, HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center, FontSize = 14,
                 },
-                Tag = tool,
-                Margin = new Thickness(2),
+                Tag = tool, Margin = new Thickness(2),
             };
+            ToolTip.SetTip(btn, tip);
             btn.PointerPressed += (_, _) => SelectTool(tool);
-            tools.Children.Add(btn);
+            _toolsPanel.Children.Add(btn);
         }
-        sidebar.Children.Add(tools);
+        sidebar.Children.Add(_toolsPanel);
 
         var undoRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
         var undoBtn = new Button { Content = "Undo", Padding = new Thickness(8, 2) };
-        undoBtn.Click += (_, _) => { _vm.Undo(); RefreshCanvas(); RefreshSheet(); RefreshFlagToggles(); };
+        ToolTip.SetTip(undoBtn, "Ctrl+Z");
+        undoBtn.Click += (_, _) => { Ctrl.HandleKey("Z", true, false, false); RefreshCanvas(); RefreshSheet(); RefreshFlagToggles(); };
         var redoBtn = new Button { Content = "Redo", Padding = new Thickness(8, 2) };
-        redoBtn.Click += (_, _) => { _vm.Redo(); RefreshCanvas(); RefreshSheet(); RefreshFlagToggles(); };
+        ToolTip.SetTip(redoBtn, "Ctrl+Y");
+        redoBtn.Click += (_, _) => { Ctrl.HandleKey("Y", true, false, false); RefreshCanvas(); RefreshSheet(); RefreshFlagToggles(); };
+        var clearBtn = new Button { Content = "Clear", Padding = new Thickness(8, 2) };
+        ToolTip.SetTip(clearBtn, "Ctrl+Delete");
+        clearBtn.Click += (_, _) => Ctrl.ClearSprite();
         undoRow.Children.Add(undoBtn);
         undoRow.Children.Add(redoBtn);
+        undoRow.Children.Add(clearBtn);
         sidebar.Children.Add(undoRow);
 
         Grid.SetColumn(sheetPanel, 0);
@@ -362,20 +459,25 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
     private void RebuildPaletteSwatches()
     {
         _palettePanel.Children.Clear();
-        var count = _vm.PaletteCount;
-        for (var i = 0; i < count; i++)
+        for (var i = 0; i < Ctrl.PaletteCount; i++)
         {
             var idx = i;
             var swatch = new Border
             {
                 Width = 24, Height = 24,
-                Background = new SolidColorBrush(Pico8Colors.ToAvaloniaColor(i, _vm.ColorChip)),
+                Background = new SolidColorBrush(Pico8Colors.ToAvaloniaColor(i, Ctrl.ColorChip)),
                 BorderBrush = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 Margin = new Thickness(1),
+                Tag = idx,
             };
-            swatch.PointerPressed += (_, _) => _vm.SelectedColor = idx;
-            swatch.Tag = idx;
+            swatch.PointerPressed += (_, e) =>
+            {
+                if (e.GetCurrentPoint(swatch).Properties.IsRightButtonPressed)
+                    Ctrl.Palette.SecondaryColor = idx;
+                else
+                    Ctrl.Palette.PrimaryColor = idx;
+            };
             _palettePanel.Children.Add(swatch);
         }
         UpdatePaletteHighlight();
@@ -386,24 +488,29 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         for (var i = 0; i < _flagsPanel.Children.Count; i++)
         {
             if (_flagsPanel.Children[i] is ToggleButton toggle)
-                toggle.IsChecked = _vm.GetFlag(i) != 0;
+                toggle.IsChecked = Ctrl.GetFlag(i) != 0;
         }
     }
 
     private void SelectTool(string tool)
     {
-        _vm.SelectedTool = tool;
         switch (tool)
         {
-            case "flip-h": _vm.FlipHorizontal(); RefreshCanvas(); RefreshSheet(); break;
-            case "flip-v": _vm.FlipVertical(); RefreshCanvas(); RefreshSheet(); break;
-            case "rotate": _vm.Rotate90(); RefreshCanvas(); RefreshSheet(); break;
-            case "copy": _vm.CopySprite(); break;
-            case "paste": _vm.PasteSprite(); RefreshCanvas(); RefreshSheet(); RefreshFlagToggles(); break;
+            case "flip-h": Ctrl.FlipHorizontal(); RefreshCanvas(); RefreshSheet(); return;
+            case "flip-v": Ctrl.FlipVertical(); RefreshCanvas(); RefreshSheet(); return;
+            case "rotate": Ctrl.Rotate90(); RefreshCanvas(); RefreshSheet(); return;
+            case "shape":
+                if (Ctrl.SelectedTool == "shape") Ctrl.CycleShapeMode();
+                else Ctrl.SelectedTool = "shape";
+                UpdateToolHighlight();
+                return;
         }
+        Ctrl.SelectedTool = tool;
+        UpdateToolHighlight();
     }
 
-    private void UpdateSpriteLabel() => _spriteLabel.Text = _vm.SpriteLabel;
+    private void UpdateSpriteLabel() => _spriteLabel.Text = Ctrl.SpriteLabel;
+    private void UpdateStatusBar() => _statusBar.Text = Ctrl.StatusText;
 
     private void UpdatePaletteHighlight()
     {
@@ -411,8 +518,22 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         {
             if (child is Border swatch && swatch.Tag is int idx)
             {
-                swatch.BorderBrush = idx == _vm.SelectedColor ? Brushes.White : Brushes.Transparent;
-                swatch.BorderThickness = new Thickness(idx == _vm.SelectedColor ? 2 : 0);
+                var isPrimary = idx == Ctrl.PrimaryColor;
+                var isSecondary = idx == Ctrl.SecondaryColor;
+                swatch.BorderBrush = isPrimary ? Brushes.White : isSecondary ? Brushes.LightGray : Brushes.Transparent;
+                swatch.BorderThickness = new Thickness(isPrimary ? 3 : isSecondary ? 1 : 0);
+            }
+        }
+    }
+
+    private void UpdateToolHighlight()
+    {
+        foreach (var child in _toolsPanel.Children)
+        {
+            if (child is Border btn && btn.Tag is string tool)
+            {
+                var active = tool == Ctrl.SelectedTool || (tool == "shape" && Ctrl.SelectedTool == "shape");
+                btn.BorderBrush = active ? Brushes.CornflowerBlue : Brushes.Transparent;
             }
         }
     }
@@ -422,113 +543,125 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         var pt = e.GetPosition(_sheetImage);
         var sx = (int)(pt.X / SheetZoom);
         var sy = (int)(pt.Y / SheetZoom);
-        if (sx < 0 || sy < 0 || sx >= _vm.SheetWidth || sy >= _vm.SheetHeight) return;
-        var col = sx / _vm.TileSize;
-        var row = sy / _vm.TileSize;
-        _vm.CurrentSpriteIndex = row * _vm.SpritesPerRow + col;
+        if (sx < 0 || sy < 0 || sx >= Ctrl.SheetWidth || sy >= Ctrl.SheetHeight) return;
+        var mods = e.KeyModifiers;
+        Ctrl.SelectSpriteAtSheet(sx, sy, mods.HasFlag(KeyModifiers.Shift), mods.HasFlag(KeyModifiers.Control));
         RefreshFlagToggles();
+        RefreshSheet();
+    }
+
+    private PointerInput BuildInput(int x, int y, bool isStart)
+    {
+        var tile = Ctrl.TileSize;
+        x = Math.Clamp(x, 0, tile - 1);
+        y = Math.Clamp(y, 0, tile - 1);
+        return new PointerInput
+        {
+            LocalX = x, LocalY = y, IsStart = isStart,
+        IsRightButton = _isRightButton,
+        Ctrl = _keyModifiers.HasFlag(KeyModifiers.Control),
+        Shift = _keyModifiers.HasFlag(KeyModifiers.Shift),
+        Alt = _keyModifiers.HasFlag(KeyModifiers.Alt),
+        };
     }
 
     private void OnCanvasPointerPressed(object? sender, PointerPressedEventArgs e)
     {
+        Focus();
         _isDrawing = true;
-        _strokeUndoPushed = false;
+        _isRightButton = e.GetCurrentPoint(_canvasImage).Properties.IsRightButtonPressed;
         var pt = e.GetPosition(_canvasImage);
-        HandleCanvasAction((int)(pt.X / CanvasZoom), (int)(pt.Y / CanvasZoom), isStart: true);
+        var zoom = Ctrl.Viewport.Zoom;
+        var x = (int)(pt.X / zoom);
+        var y = (int)(pt.Y / zoom);
+        var input = BuildInput(x, y, isStart: true);
+
+        if (Ctrl.IsSpaceHeld || Ctrl.SelectedTool == "pan")
+        {
+            Ctrl.OnPointerDownPan(input);
+            return;
+        }
+
+        if (_isRightButton && Ctrl.SelectedTool == "pencil")
+        {
+            Ctrl.HandleEyedropper(input);
+            return;
+        }
+
+        Ctrl.OnPointerDown(input);
     }
 
     private void OnCanvasPointerMoved(object? sender, PointerEventArgs e)
     {
-        if (!_isDrawing) return;
         var pt = e.GetPosition(_canvasImage);
-        HandleCanvasAction((int)(pt.X / CanvasZoom), (int)(pt.Y / CanvasZoom), isStart: false);
+        var zoom = Ctrl.Viewport.Zoom;
+        var x = (int)(pt.X / zoom);
+        var y = (int)(pt.Y / zoom);
+        var input = BuildInput(x, y, isStart: false);
+
+        if (!_isDrawing && Ctrl.SelectedTool == "stamp" && Ctrl.Clipboard.HasContent && !Ctrl.IsSpaceHeld)
+        {
+            Ctrl.UpdateStampPreview(input);
+            return;
+        }
+
+        if (!_isDrawing) return;
+
+        if (Ctrl.IsSpaceHeld)
+        {
+            Ctrl.OnPointerMovePan(input);
+            return;
+        }
+
+        Ctrl.OnPointerMove(input);
+    }
+
+    private void OnCanvasPointerExited(object? sender, PointerEventArgs e) =>
+        Ctrl.ClearStampPreview();
+
+    private void OnCanvasWheel(object? sender, PointerWheelEventArgs e)
+    {
+        var delta = e.Delta.Y > 0 ? 1 : -1;
+        var pt = e.GetPosition(_canvasImage);
+        Ctrl.Viewport.AdjustZoom(delta, (int)pt.X, (int)pt.Y);
+        e.Handled = true;
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        if (_isMovingSelection && _selectionBuffer != null && _selectionOrigin is { } origin)
+        if (_isDrawing)
         {
-            PasteSelection(origin.x, origin.y);
+            var pt = e.GetPosition(_canvasImage);
+            var zoom = Ctrl.Viewport.Zoom;
+            var input = BuildInput((int)(pt.X / zoom), (int)(pt.Y / zoom), isStart: false);
+            if (Ctrl.IsSpaceHeld)
+                Ctrl.OnPointerUpPan(input);
+            else
+                Ctrl.OnPointerUp(input);
         }
         _isDrawing = false;
-        _isMovingSelection = false;
-        _selectStart = null;
+        _isRightButton = false;
     }
 
-    private void HandleCanvasAction(int x, int y, bool isStart)
+    private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        var tile = _vm.TileSize;
-        if (x < 0 || x >= tile || y < 0 || y >= tile) return;
+        _keyModifiers = e.KeyModifiers;
+        var key = e.Key.ToString();
+        var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
 
-        switch (_vm.SelectedTool)
-        {
-            case "picker":
-                _vm.SelectedColor = _vm.GetPixel(x, y);
-                break;
-            case "fill":
-                if (isStart) { _vm.FloodFill(x, y, _vm.SelectedColor); RefreshCanvas(); RefreshSheet(); }
-                break;
-            case "select":
-                if (isStart)
-                {
-                    _selectStart = (x, y);
-                    _selectionOrigin = (x, y);
-                }
-                else if (_selectStart is { } start)
-                {
-                    _selectionBuffer = ExtractSelection(start.x, start.y, x, y);
-                    _selectionOrigin = (Math.Min(start.x, x), Math.Min(start.y, y));
-                    _isMovingSelection = true;
-                }
-                break;
-            case "pencil":
-            default:
-                if (!_strokeUndoPushed) { _vm.PushUndo("draw"); _strokeUndoPushed = true; }
-                _vm.SetPixel(x, y, _vm.SelectedColor);
-                RefreshCanvas();
-                RefreshSheet();
-                break;
-        }
+        if (Ctrl.HandleKey(key, ctrl, shift, alt))
+            e.Handled = true;
+
+        Ctrl.RefreshStampPreviewModifiers(ctrl);
     }
 
-    private void PasteSelection(int destX, int destY)
+    private void OnKeyUp(object? sender, KeyEventArgs e)
     {
-        if (_selectionBuffer == null || _selectStart is not { } start) return;
-        var left = Math.Min(start.x, destX);
-        var top = Math.Min(start.y, destY);
-        var right = Math.Max(start.x, destX);
-        var bottom = Math.Max(start.y, destY);
-        var w = right - left + 1;
-        var h = bottom - top + 1;
-
-        _vm.PushUndo("move");
-        for (var row = 0; row < h; row++)
-        for (var col = 0; col < w; col++)
-        {
-            var idx = row * w + col;
-            if (idx >= _selectionBuffer.Length) continue;
-            var px = left + col;
-            var py = top + row;
-            if (px >= 0 && py >= 0 && px < _vm.TileSize && py < _vm.TileSize)
-                _vm.SetPixel(px, py, _selectionBuffer[idx]);
-        }
-        RefreshCanvas();
-        RefreshSheet();
-    }
-
-    private byte[] ExtractSelection(int x0, int y0, int x1, int y1)
-    {
-        var left = Math.Min(x0, x1);
-        var right = Math.Max(x0, x1);
-        var top = Math.Min(y0, y1);
-        var bottom = Math.Max(y0, y1);
-        var w = right - left + 1;
-        var h = bottom - top + 1;
-        var buf = new byte[w * h];
-        for (var row = 0; row < h; row++)
-        for (var col = 0; col < w; col++)
-            buf[row * w + col] = (byte)_vm.GetPixel(left + col, top + row);
-        return buf;
+        _keyModifiers = e.KeyModifiers;
+        Ctrl.HandleKeyUp(e.Key.ToString());
+        Ctrl.RefreshStampPreviewModifiers(e.KeyModifiers.HasFlag(KeyModifiers.Control));
     }
 }

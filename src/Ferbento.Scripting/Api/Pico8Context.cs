@@ -24,6 +24,7 @@ public sealed class Pico8Context
     public Action<string>? ExtCommandHandler { get; set; }
     public BreakpointManager Breakpoints { get; } = new();
     public bool RebootRequested { get; set; }
+    public bool FlipCalled { get; set; }
     public string? CurrentSource { get; set; }
     public string? WorkingDirectory { get; set; }
 

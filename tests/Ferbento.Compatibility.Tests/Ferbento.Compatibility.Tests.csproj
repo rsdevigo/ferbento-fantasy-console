@@ -20,6 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Ferbento.Core\Ferbento.Core.csproj" />
     <ProjectReference Include="..\..\src\Ferbento.Scripting\Ferbento.Scripting.csproj" />
     <ProjectReference Include="..\..\src\Ferbento.Cartridge\Ferbento.Cartridge.csproj" />
     <ProjectReference Include="..\..\src\Ferbento.Profiles\Ferbento.Profiles.csproj" />

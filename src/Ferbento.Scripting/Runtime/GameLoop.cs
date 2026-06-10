@@ -56,6 +56,7 @@ public sealed class GameLoop
         if (!_initialized) Boot();
 
         _sandbox.Context.ResetCpuBudget();
+        _sandbox.Context.FlipCalled = false;
         _sandbox.Context.FrameTime = GetTimeSeconds();
         _sandbox.Context.FrameCount = _frameCounter;
 
@@ -66,7 +67,11 @@ public sealed class GameLoop
 
         var shouldDraw = !_hasUpdate60 || (_frameCounter & 1) == 0;
         if (_hasDraw && shouldDraw)
+        {
             _sandbox.Call("_draw");
+            if (_preserveCartData && !_sandbox.Context.FlipCalled)
+                _bus.Display.Flip();
+        }
 
         _bus.Tick();
         _frameCounter++;

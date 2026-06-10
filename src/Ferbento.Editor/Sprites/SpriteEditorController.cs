@@ -1,0 +1,650 @@
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using Ferbento.Core.Chips;
+using Ferbento.Editor.Sprites.Animation;
+using Ferbento.Editor.Sprites.Input;
+using Ferbento.Editor.Sprites.Tools;
+using Ferbento.Editor.Sprites.Undo;
+using Ferbento.Profiles.Models;
+
+namespace Ferbento.Editor.Sprites;
+
+public sealed class SpriteEditorController : INotifyPropertyChanged
+{
+    public SpriteDocument Document { get; } = new();
+    public PaletteState Palette { get; } = new();
+    public Selection Selection { get; } = new();
+    public ViewportState Viewport { get; } = new();
+    public UndoService UndoService { get; } = new(256);
+    public SpriteClipboard Clipboard { get; } = new();
+    public OnionSkinSettings OnionSkin { get; } = new();
+    public TimelineState Timeline { get; } = new();
+    public IAnimationProvider AnimationProvider { get; set; } = new NullAnimationProvider();
+
+    private readonly Dictionary<string, ISpriteTool> _tools;
+    private readonly ShapeToolHost _shapeHost = new();
+    private readonly SpriteEditorContext _ctx;
+    private string _selectedTool = "pencil";
+    private bool _spaceHeld;
+
+    public event Action? Edited;
+    public event Action? RefreshRequested;
+
+    public bool CanUndo => UndoService.UndoCount > 0;
+    public bool CanRedo => UndoService.RedoCount > 0;
+
+    public int TileSize => Document.TileSize;
+    public int SheetWidth => Document.SheetWidth;
+    public int SheetHeight => Document.SheetHeight;
+    public int SpritesPerRow => Document.SpritesPerRow;
+    public int SpriteCount => Document.SpriteCount;
+    public int PaletteCount => Document.PaletteCount;
+    public bool UsesGfx2Bank => Document.UsesGfx2Bank;
+    public ColorChip? ColorChip => Document.ColorChip;
+
+    public int SelectedColor
+    {
+        get => Palette.PrimaryColor;
+        set => Palette.PrimaryColor = value;
+    }
+
+    public int PrimaryColor => Palette.PrimaryColor;
+    public int SecondaryColor => Palette.SecondaryColor;
+
+    public string SelectedTool
+    {
+        get => _selectedTool;
+        set
+        {
+            if (_selectedTool == value) return;
+            if (value != "stamp")
+                StampTool.ClearPreview(_ctx);
+            _selectedTool = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ActiveToolLabel));
+        }
+    }
+
+    public ShapeMode ShapeMode => _shapeHost.Mode;
+    public (int x, int y)? StampPreviewPosition => _ctx.StampPreviewPosition;
+    public bool StampPreviewSkipTransparent => _ctx.StampPreviewSkipTransparent;
+
+    public string ActiveToolLabel =>
+        _selectedTool == "shape" ? $"shape ({_shapeHost.Mode})" : _selectedTool;
+
+    public int CurrentSpriteIndex
+    {
+        get => Document.CurrentSpriteIndex;
+        set
+        {
+            if (Document.CurrentSpriteIndex == value) return;
+            Document.CurrentSpriteIndex = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SpriteLabel));
+            NotifyFlagsChanged();
+            RequestRefresh();
+        }
+    }
+
+    public int GfxBank
+    {
+        get => Document.GfxBank;
+        set
+        {
+            Document.GfxBank = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SpriteLabel));
+        }
+    }
+
+    public string SpriteLabel =>
+        UsesGfx2Bank && GfxBank == 1
+            ? $"Sprite #{CurrentSpriteIndex} (GFX2)"
+            : $"Sprite #{CurrentSpriteIndex}";
+
+    public string StatusText =>
+        $"Zoom {Viewport.ZoomPercent}% | Color {PrimaryColor}/{SecondaryColor} | {ActiveToolLabel}";
+
+    public SpriteEditorController()
+    {
+        _tools = new Dictionary<string, ISpriteTool>
+        {
+            ["pencil"] = new PencilTool(),
+            ["fill"] = new FillTool(),
+            ["picker"] = new PickerTool(),
+            ["select"] = new SelectionTool(),
+            ["shape"] = _shapeHost,
+            ["line"] = new LineTool(),
+            ["rect"] = new RectangleTool(),
+            ["circle"] = new CircleTool(),
+            ["stamp"] = new StampTool(),
+            ["pan"] = new PanTool(),
+        };
+
+        _ctx = new SpriteEditorContext
+        {
+            Document = Document,
+            Palette = Palette,
+            Selection = Selection,
+            Viewport = Viewport,
+            Undo = UndoService,
+            Clipboard = Clipboard,
+            NotifyEdited = () => Edited?.Invoke(),
+            RequestRefresh = RequestRefresh,
+        };
+
+        UndoService.StateChanged += () =>
+        {
+            OnPropertyChanged(nameof(CanUndo));
+            OnPropertyChanged(nameof(CanRedo));
+        };
+
+        Palette.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(PaletteState.PrimaryColor))
+                OnPropertyChanged(nameof(SelectedColor));
+            OnPropertyChanged(nameof(PrimaryColor));
+            OnPropertyChanged(nameof(SecondaryColor));
+            OnPropertyChanged(nameof(StatusText));
+        };
+
+        Viewport.PropertyChanged += (_, _) =>
+            OnPropertyChanged(nameof(StatusText));
+    }
+
+    public void SetProfile(HardwareProfile profile)
+    {
+        Document.SetProfile(profile);
+        Palette.PaletteCount = Document.PaletteCount;
+        OnPropertyChanged(nameof(TileSize));
+        OnPropertyChanged(nameof(SheetWidth));
+        OnPropertyChanged(nameof(SheetHeight));
+        OnPropertyChanged(nameof(SpritesPerRow));
+        OnPropertyChanged(nameof(SpriteCount));
+        OnPropertyChanged(nameof(PaletteCount));
+        OnPropertyChanged(nameof(UsesGfx2Bank));
+        CurrentSpriteIndex = Math.Min(CurrentSpriteIndex, Math.Max(0, SpriteCount - 1));
+    }
+
+    public void SetChipBus(ChipBus bus)
+    {
+        Document.SetChipBus(bus);
+        Palette.PaletteCount = Document.PaletteCount;
+    }
+
+    public void SwitchGfxBank(int bank) => GfxBank = bank == 0 ? 0 : 1;
+
+    public int GetFlag(int bit) => Document.GetFlag(CurrentSpriteIndex, bit);
+    public int AllFlags => Document.GetCurrentFlags();
+
+    public void SetFlag(int bit, bool value)
+    {
+        var before = Document.GetCurrentSpritePixels();
+        var beforeFlags = Document.GetCurrentFlags();
+        Document.SetFlag(CurrentSpriteIndex, bit, value);
+        var after = Document.GetCurrentSpritePixels();
+        var afterFlags = Document.GetCurrentFlags();
+        UndoService.Execute(new SpritePatchCommand(Document, CurrentSpriteIndex, "flag", before, after, beforeFlags, afterFlags));
+        NotifyFlagsChanged();
+        Edited?.Invoke();
+    }
+
+    public void ToggleFlag(int bit) => SetFlag(bit, GetFlag(bit) == 0);
+
+    private void NotifyFlagsChanged()
+    {
+        for (var i = 0; i < 8; i++)
+            OnPropertyChanged($"Flag{i}");
+        OnPropertyChanged(nameof(AllFlags));
+    }
+
+    public void RequestRefresh() => RefreshRequested?.Invoke();
+
+    public void Undo()
+    {
+        if (UndoService.Undo()) { Edited?.Invoke(); RequestRefresh(); NotifyFlagsChanged(); }
+    }
+
+    public void Redo()
+    {
+        if (UndoService.Redo()) { Edited?.Invoke(); RequestRefresh(); NotifyFlagsChanged(); }
+    }
+
+    public ISpriteTool? GetActiveTool() =>
+        _tools.TryGetValue(_selectedTool, out var tool) ? tool : _tools["pencil"];
+
+    public void CycleShapeMode()
+    {
+        _shapeHost.CycleMode();
+        OnPropertyChanged(nameof(ShapeMode));
+        OnPropertyChanged(nameof(ActiveToolLabel));
+        OnPropertyChanged(nameof(StatusText));
+    }
+
+    public void OnPointerDown(PointerInput input) => GetActiveTool()?.OnPointerDown(_ctx, input);
+    public void OnPointerMove(PointerInput input) => GetActiveTool()?.OnPointerMove(_ctx, input);
+    public void OnPointerUp(PointerInput input) => GetActiveTool()?.OnPointerUp(_ctx, input);
+
+    public void UpdateStampPreview(PointerInput input)
+    {
+        if (SelectedTool != "stamp" || !Clipboard.HasContent) return;
+        _tools["stamp"].OnPointerMove(_ctx, input);
+    }
+
+    public void ClearStampPreview() => StampTool.ClearPreview(_ctx);
+
+    public void RefreshStampPreviewModifiers(bool ctrlHeld)
+    {
+        if (SelectedTool != "stamp" || _ctx.StampPreviewPosition == null) return;
+        _ctx.StampPreviewSkipTransparent = ctrlHeld;
+        RequestRefresh();
+    }
+
+    public void OnPointerDownPan(PointerInput input)
+    {
+        _tools["pan"].OnPointerDown(_ctx, input);
+    }
+
+    public void OnPointerMovePan(PointerInput input)
+    {
+        if (_ctx.IsPanning)
+            _tools["pan"].OnPointerMove(_ctx, input);
+    }
+
+    public void OnPointerUpPan(PointerInput input) => _tools["pan"].OnPointerUp(_ctx, input);
+
+    public void HandleEyedropper(PointerInput input)
+    {
+        var color = Document.GetLocalPixel(input.LocalX, input.LocalY);
+        if (input.Shift)
+            Palette.SecondaryColor = color;
+        else
+            Palette.PrimaryColor = color;
+    }
+
+    public bool HandleKey(string key, bool ctrl, bool shift, bool alt)
+    {
+        if (key == "Space")
+        {
+            _spaceHeld = true;
+            return true;
+        }
+
+        var action = MapKey(key, ctrl, shift, alt);
+        if (action == null) return false;
+        return ExecuteAction(action.Value, shift);
+    }
+
+    public void HandleKeyUp(string key)
+    {
+        if (key == "Space") _spaceHeld = false;
+    }
+
+    public bool IsSpaceHeld => _spaceHeld;
+
+    private static SpriteEditorAction? MapKey(string key, bool ctrl, bool shift, bool alt)
+    {
+        if (ctrl && shift && key == "Delete") return SpriteEditorAction.ClearSprite;
+        if (ctrl && key == "Z") return SpriteEditorAction.Undo;
+        if (ctrl && key == "Y") return SpriteEditorAction.Redo;
+        if (ctrl && key == "C") return SpriteEditorAction.Copy;
+        if (ctrl && key == "X") return SpriteEditorAction.Cut;
+        if (ctrl && key == "V") return SpriteEditorAction.Paste;
+        if (ctrl && key == "G") return SpriteEditorAction.ToggleGrid;
+        if (ctrl && key == "H") return SpriteEditorAction.ToggleHexView;
+        if (ctrl && key == "Delete") return SpriteEditorAction.ClearSprite;
+        if (key == "Q") return SpriteEditorAction.PrevSprite;
+        if (key == "W") return SpriteEditorAction.NextSprite;
+        if (key == "1") return SpriteEditorAction.PrevColor;
+        if (key == "2") return SpriteEditorAction.NextColor;
+        if (key == "Oemplus" || key == "Add") return SpriteEditorAction.ZoomIn;
+        if (key == "OemMinus" || key == "Subtract") return SpriteEditorAction.ZoomOut;
+        if (key == "Tab") return SpriteEditorAction.ToggleFullscreen;
+        if (key == "S" && !ctrl) return SpriteEditorAction.SelectTool;
+        if (key == "F") return SpriteEditorAction.FlipH;
+        if (key == "V" && !ctrl) return SpriteEditorAction.FlipV;
+        if (key == "R") return SpriteEditorAction.Rotate;
+        if (key == "Return") return SpriteEditorAction.ClearSelection;
+        if (key == "Delete" || key == "Back") return SpriteEditorAction.ClearArea;
+        if (key == "X" && !ctrl) return SpriteEditorAction.SwapColors;
+        if (key == "P") return SpriteEditorAction.ToolPencil;
+        if (key == "B") return SpriteEditorAction.ToolFill;
+        if (key == "I") return SpriteEditorAction.ToolPicker;
+        if (key == "T") return SpriteEditorAction.ToolStamp;
+        if (key == "L") return SpriteEditorAction.ToolShape;
+        if (key == "Left") return shift ? SpriteEditorAction.ShiftLeft : SpriteEditorAction.MoveLeft;
+        if (key == "Right") return shift ? SpriteEditorAction.ShiftRight : SpriteEditorAction.MoveRight;
+        if (key == "Up") return shift ? SpriteEditorAction.ShiftUp : SpriteEditorAction.MoveUp;
+        if (key == "Down") return shift ? SpriteEditorAction.ShiftDown : SpriteEditorAction.MoveDown;
+        if (key == "LeftShift" || key == "RightShift") return SpriteEditorAction.SelectTool;
+        return null;
+    }
+
+    private bool ExecuteAction(SpriteEditorAction action, bool shift)
+    {
+        switch (action)
+        {
+            case SpriteEditorAction.Undo:
+                Undo();
+                return true;
+            case SpriteEditorAction.Redo:
+                Redo();
+                return true;
+            case SpriteEditorAction.Copy: Copy(); return true;
+            case SpriteEditorAction.Cut: Cut(); return true;
+            case SpriteEditorAction.Paste: Paste(); return true;
+            case SpriteEditorAction.PrevSprite: CurrentSpriteIndex--; return true;
+            case SpriteEditorAction.NextSprite: CurrentSpriteIndex++; return true;
+            case SpriteEditorAction.PrevColor:
+                if (shift) Palette.PrevColor(secondary: true); else Palette.PrevColor();
+                return true;
+            case SpriteEditorAction.NextColor:
+                if (shift) Palette.NextColor(secondary: true); else Palette.NextColor();
+                return true;
+            case SpriteEditorAction.ZoomIn: Viewport.AdjustZoom(1); return true;
+            case SpriteEditorAction.ZoomOut: Viewport.AdjustZoom(-1); return true;
+            case SpriteEditorAction.ToggleFullscreen: Viewport.Fullscreen = !Viewport.Fullscreen; return true;
+            case SpriteEditorAction.ToggleGrid: Viewport.GridVisible = !Viewport.GridVisible; return true;
+            case SpriteEditorAction.ToggleHexView: Viewport.HexView = !Viewport.HexView; return true;
+            case SpriteEditorAction.SelectTool: SelectedTool = "select"; return true;
+            case SpriteEditorAction.FlipH: FlipHorizontal(); return true;
+            case SpriteEditorAction.FlipV: FlipVertical(); return true;
+            case SpriteEditorAction.Rotate: Rotate90(); return true;
+            case SpriteEditorAction.ShiftUp: ShiftPixels(0, -1); return true;
+            case SpriteEditorAction.ShiftDown: ShiftPixels(0, 1); return true;
+            case SpriteEditorAction.ShiftLeft: ShiftPixels(-1, 0); return true;
+            case SpriteEditorAction.ShiftRight: ShiftPixels(1, 0); return true;
+            case SpriteEditorAction.MoveUp: MoveSelection(0, -1); return true;
+            case SpriteEditorAction.MoveDown: MoveSelection(0, 1); return true;
+            case SpriteEditorAction.MoveLeft: MoveSelection(-1, 0); return true;
+            case SpriteEditorAction.MoveRight: MoveSelection(1, 0); return true;
+            case SpriteEditorAction.ClearSelection:
+                Selection.Clear();
+                GetActiveTool()?.OnCancel(_ctx);
+                RequestRefresh();
+                return true;
+            case SpriteEditorAction.ClearArea: ClearSelectionArea(); return true;
+            case SpriteEditorAction.SwapColors: Palette.Swap(); return true;
+            case SpriteEditorAction.ClearSprite: ClearSprite(); return true;
+            case SpriteEditorAction.ToolPencil: SelectedTool = "pencil"; return true;
+            case SpriteEditorAction.ToolFill: SelectedTool = "fill"; return true;
+            case SpriteEditorAction.ToolPicker: SelectedTool = "picker"; return true;
+            case SpriteEditorAction.ToolStamp: SelectedTool = "stamp"; return true;
+            case SpriteEditorAction.ToolShape:
+                if (SelectedTool == "shape") CycleShapeMode();
+                else SelectedTool = "shape";
+                return true;
+        }
+        return false;
+    }
+
+    public void Copy()
+    {
+        if (Selection.HasPixelSelection && Selection.PixelBuffer != null)
+        {
+            Clipboard.CopyPixels(Selection.PixelBuffer, Selection.PixelWidth, Selection.PixelHeight);
+            return;
+        }
+
+        if (Selection.HasSpriteSelection)
+        {
+            var sprites = Selection.SpriteIndices.OrderBy(i => i)
+                .Select(i => (i, Document.GetSpritePixels(i), Document.GetFlags(i))).ToList();
+            Clipboard.CopySprites(sprites, TileSize);
+            return;
+        }
+
+        Clipboard.CopySprite(Document.GetCurrentSpritePixels(), TileSize, Document.GetCurrentFlags());
+    }
+
+    public void Cut()
+    {
+        Copy();
+        if (Selection.HasPixelSelection)
+            ClearSelectionArea();
+        else if (Selection.HasSpriteSelection)
+        {
+            foreach (var idx in Selection.SpriteIndices)
+                ClearSpriteAt(idx);
+        }
+        else
+            ClearSprite();
+    }
+
+    public void Paste()
+    {
+        if (!Clipboard.HasContent || Clipboard.Pixels == null) return;
+
+        if (Clipboard.IsSpriteLevel && !Selection.HasPixelSelection)
+        {
+            var before = Document.GetCurrentSpritePixels();
+            var beforeFlags = Document.GetCurrentFlags();
+            Document.SetCurrentSpritePixels(Clipboard.Pixels);
+            Document.SetFlags(CurrentSpriteIndex, Clipboard.Flags);
+            var after = Document.GetCurrentSpritePixels();
+            UndoService.Execute(new SpritePatchCommand(Document, CurrentSpriteIndex, "paste", before, after, beforeFlags, Clipboard.Flags));
+            Edited?.Invoke();
+            RequestRefresh();
+            NotifyFlagsChanged();
+            return;
+        }
+
+        var tile = TileSize;
+        var before2 = Document.GetCurrentSpritePixels();
+        var beforeFlags2 = Document.GetCurrentFlags();
+        for (var y = 0; y < Clipboard.Height; y++)
+        for (var x = 0; x < Clipboard.Width; x++)
+        {
+            var color = Clipboard.Pixels[y * Clipboard.Width + x];
+            if (x < tile && y < tile)
+                Document.SetLocalPixel(x, y, color);
+        }
+        var after2 = Document.GetCurrentSpritePixels();
+        UndoService.Execute(new SpritePatchCommand(Document, CurrentSpriteIndex, "paste", before2, after2, beforeFlags2, beforeFlags2));
+        Edited?.Invoke();
+        RequestRefresh();
+    }
+
+    public void FlipHorizontal()
+    {
+        if (Selection.HasSpriteSelection)
+        {
+            var cmd = new MultiSpritePatchCommand(Document, "flip-h");
+            foreach (var idx in Selection.SpriteIndices)
+            {
+                var before = Document.GetSpritePixels(idx);
+                var after = PixelDrawing.FlipHorizontal(before, TileSize);
+                cmd.AddPatch(idx, before, after, Document.GetFlags(idx), Document.GetFlags(idx));
+            }
+            UndoService.Execute(cmd);
+        }
+        else
+        {
+            var before = Document.GetCurrentSpritePixels();
+            var after = PixelDrawing.FlipHorizontal(before, TileSize);
+            _ctx.ApplyCurrentSpritePatch("flip-h", after, Document.GetCurrentFlags());
+        }
+        RequestRefresh();
+    }
+
+    public void FlipVertical()
+    {
+        if (Selection.HasSpriteSelection)
+        {
+            var cmd = new MultiSpritePatchCommand(Document, "flip-v");
+            foreach (var idx in Selection.SpriteIndices)
+            {
+                var before = Document.GetSpritePixels(idx);
+                var after = PixelDrawing.FlipVertical(before, TileSize);
+                cmd.AddPatch(idx, before, after, Document.GetFlags(idx), Document.GetFlags(idx));
+            }
+            UndoService.Execute(cmd);
+        }
+        else
+        {
+            var before = Document.GetCurrentSpritePixels();
+            var after = PixelDrawing.FlipVertical(before, TileSize);
+            _ctx.ApplyCurrentSpritePatch("flip-v", after, Document.GetCurrentFlags());
+        }
+        RequestRefresh();
+    }
+
+    public void Rotate90()
+    {
+        if (Selection.HasPixelSelection)
+        {
+            if (Selection.PixelWidth != Selection.PixelHeight) return;
+            var w = Selection.PixelWidth;
+            var buf = Selection.PixelBuffer ?? Document.ReadLocalRegion(Selection.PixelX, Selection.PixelY, w, w);
+            var rotated = PixelDrawing.Rotate90(buf, w);
+            var before = Document.GetCurrentSpritePixels();
+            var beforeFlags = Document.GetCurrentFlags();
+            Document.WriteLocalRegion(Selection.PixelX, Selection.PixelY, w, w, rotated);
+            var after = Document.GetCurrentSpritePixels();
+            UndoService.Execute(new SpritePatchCommand(Document, CurrentSpriteIndex, "rotate", before, after, beforeFlags, beforeFlags));
+            Selection.SetPixelRect(Selection.PixelX, Selection.PixelY, Selection.PixelX + w - 1, Selection.PixelY + w - 1, rotated);
+        }
+        else
+        {
+            var before = Document.GetCurrentSpritePixels();
+            var after = PixelDrawing.Rotate90(before, TileSize);
+            _ctx.ApplyCurrentSpritePatch("rotate", after, Document.GetCurrentFlags());
+        }
+        RequestRefresh();
+    }
+
+    public void ShiftPixels(int dx, int dy)
+    {
+        if (Selection.HasPixelSelection)
+        {
+            var w = Selection.PixelWidth;
+            var h = Selection.PixelHeight;
+            var buf = Document.ReadLocalRegion(Selection.PixelX, Selection.PixelY, w, h);
+            var shifted = PixelDrawing.ShiftRegion(buf, w, h, dx, dy);
+            var before = Document.GetCurrentSpritePixels();
+            var beforeFlags = Document.GetCurrentFlags();
+            Document.WriteLocalRegion(Selection.PixelX, Selection.PixelY, w, h, shifted);
+            var after = Document.GetCurrentSpritePixels();
+            UndoService.Execute(new SpritePatchCommand(Document, CurrentSpriteIndex, "shift", before, after, beforeFlags, beforeFlags));
+            Selection.PixelBuffer = shifted;
+        }
+        else
+        {
+            var before = Document.GetCurrentSpritePixels();
+            var after = PixelDrawing.ShiftCircular(before, TileSize, dx, dy);
+            _ctx.ApplyCurrentSpritePatch("shift", after, Document.GetCurrentFlags());
+        }
+        RequestRefresh();
+    }
+
+    public void MoveSelection(int dx, int dy)
+    {
+        if (!Selection.HasPixelSelection || Selection.PixelBuffer == null) return;
+        Selection.SetPixelRect(
+            Selection.PixelX + dx, Selection.PixelY + dy,
+            Selection.PixelX + dx + Selection.PixelWidth - 1,
+            Selection.PixelY + dy + Selection.PixelHeight - 1,
+            Selection.PixelBuffer);
+        RequestRefresh();
+    }
+
+    public void ClearSelectionArea()
+    {
+        if (Selection.HasPixelSelection)
+        {
+            var before = Document.GetCurrentSpritePixels();
+            var beforeFlags = Document.GetCurrentFlags();
+            var clear = new byte[Selection.PixelWidth * Selection.PixelHeight];
+            Document.WriteLocalRegion(Selection.PixelX, Selection.PixelY, Selection.PixelWidth, Selection.PixelHeight, clear);
+            var after = Document.GetCurrentSpritePixels();
+            UndoService.Execute(new SpritePatchCommand(Document, CurrentSpriteIndex, "clear", before, after, beforeFlags, beforeFlags));
+            Edited?.Invoke();
+            RequestRefresh();
+            return;
+        }
+        ClearSprite();
+    }
+
+    public void ClearSprite() => ClearSpriteAt(CurrentSpriteIndex);
+
+    public void ClearSpriteAt(int spriteIndex)
+    {
+        var before = Document.GetSpritePixels(spriteIndex);
+        var beforeFlags = Document.GetFlags(spriteIndex);
+        var clear = new byte[TileSize * TileSize];
+        _ctx.ApplySpritePatch("clear", spriteIndex, clear, 0);
+        RequestRefresh();
+    }
+
+    public void DuplicateSprites()
+    {
+        var indices = Selection.HasSpriteSelection
+            ? Selection.SpriteIndices.OrderBy(i => i).ToList()
+            : [CurrentSpriteIndex];
+
+        var cmd = new MultiSpritePatchCommand(Document, "duplicate");
+        var dest = Document.FindNextFreeSpriteIndex(indices[^1]);
+        if (dest < 0) return;
+
+        foreach (var src in indices)
+        {
+            if (dest < 0 || dest >= SpriteCount) break;
+            var pixels = Document.GetSpritePixels(src);
+            var flags = Document.GetFlags(src);
+            var empty = new byte[TileSize * TileSize];
+            cmd.AddPatch(dest, empty, pixels, 0, flags);
+            dest = Document.FindNextFreeSpriteIndex(dest);
+        }
+        UndoService.Execute(cmd);
+        Edited?.Invoke();
+        RequestRefresh();
+    }
+
+    public void DeleteSprites()
+    {
+        var indices = Selection.HasSpriteSelection
+            ? Selection.SpriteIndices.ToList()
+            : [CurrentSpriteIndex];
+        var cmd = new MultiSpritePatchCommand(Document, "delete");
+        foreach (var idx in indices)
+        {
+            var before = Document.GetSpritePixels(idx);
+            var clear = new byte[TileSize * TileSize];
+            cmd.AddPatch(idx, before, clear, Document.GetFlags(idx), 0);
+        }
+        UndoService.Execute(cmd);
+        Edited?.Invoke();
+        RequestRefresh();
+    }
+
+    public void SelectSpriteAtSheet(int sheetX, int sheetY, bool shift, bool ctrl)
+    {
+        var col = sheetX / TileSize;
+        var row = sheetY / TileSize;
+        var index = row * SpritesPerRow + col;
+        if (index < 0 || index >= SpriteCount) return;
+
+        if (ctrl)
+        {
+            Selection.SetSprites(Enumerable.Range(0, SpriteCount));
+            return;
+        }
+
+        if (shift)
+            Selection.AddSprite(index);
+        else
+        {
+            Selection.Clear();
+            CurrentSpriteIndex = index;
+        }
+        RequestRefresh();
+    }
+
+    public int GetPixel(int localX, int localY) => Document.GetLocalPixel(localX, localY);
+    public int ReadSheetPixel(int sheetX, int sheetY) => Document.GetPixel(sheetX, sheetY);
+    public (int sheetX, int sheetY) SpriteOrigin => Document.SpriteOrigin;
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}

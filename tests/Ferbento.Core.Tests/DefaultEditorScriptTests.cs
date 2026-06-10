@@ -5,17 +5,18 @@ namespace Ferbento.Core.Tests;
 public class DefaultEditorScriptTests
 {
     private const string DefaultScript = """
-        # Ferbento — Pico-8 compatible GDScript
+        # Ferbento - Pico-8 compatible GDScript
 
         func _init():
-            cls(0)
+            pass
 
         func _update():
             if btn(0):
                 pass
 
         func _draw():
-            circfill(64, 64, 20, 8)
+            cls(0)
+            spr(0, 56, 56)
             flip()
         """;
 

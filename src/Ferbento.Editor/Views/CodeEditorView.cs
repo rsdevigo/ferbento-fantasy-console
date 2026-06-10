@@ -148,16 +148,19 @@ public class CodeEditorView : UserControl
 
     private const string DefaultScript = """
         # Ferbento - Pico-8 compatible GDScript
+        # Draw sprites from the Sprites tab with spr(index, x, y).
+        # Use palette colors 1-15 in the editor (color 0 is transparent).
 
         func _init():
-            cls(0)
+            pass
 
         func _update():
             if btn(0):
                 pass
 
         func _draw():
-            circfill(64, 64, 20, 8)
+            cls(0)
+            spr(0, 56, 56)
             flip()
         """;
 }

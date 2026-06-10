@@ -203,6 +203,7 @@ public static class GraphicsApi
 
         env.Define("flip", ScriptValue.Native(_ =>
         {
+            ctx.FlipCalled = true;
             bus.Display.Flip();
             return ScriptValue.Nil;
         }));
@@ -219,16 +220,20 @@ public static class GraphicsApi
         var fy = args.Length > 6 && args[6].IsTruthy();
         var state = bus.Display.DrawState;
         var renderer = bus.Display.Renderer;
+        var tile = bus.Sprite.TileSize;
+        var cols = bus.Sprite.SpritesPerRow;
+        var tileW = w * tile;
+        var tileH = h * tile;
 
-        for (var row = 0; row < h * 8; row++)
+        for (var row = 0; row < tileH; row++)
         {
-            for (var col = 0; col < w * 8; col++)
+            for (var col = 0; col < tileW; col++)
             {
-                var sx = (n % 16) * 8 + (fx ? (w * 8 - 1 - col) : col);
-                var sy = (n / 16) * 8 + (fy ? (h * 8 - 1 - row) : row);
+                var sx = (n % cols) * tile + (fx ? tileW - 1 - col : col);
+                var sy = (n / cols) * tile + (fy ? tileH - 1 - row : row);
                 var c = bus.Sprite.SGet(sx, sy);
                 if (state.PaletteTransparent[c & 0xF]) continue;
-                renderer.PSet(x + col, y + row, state.DrawPalette[c & 0xF]);
+                renderer.PSet(x + col, y + row, c & 0xF);
             }
         }
     }
@@ -254,7 +259,7 @@ public static class GraphicsApi
                 var srcY = sy + row * sh / Math.Max(1, dh);
                 var c = bus.Sprite.SGet(srcX, srcY);
                 if (state.PaletteTransparent[c & 0xF]) continue;
-                renderer.PSet(dx + col, dy + row, state.DrawPalette[c & 0xF]);
+                renderer.PSet(dx + col, dy + row, c & 0xF);
             }
         }
     }
