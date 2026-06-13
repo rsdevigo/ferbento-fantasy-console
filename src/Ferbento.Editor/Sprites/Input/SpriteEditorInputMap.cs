@@ -8,7 +8,7 @@ public enum SpriteEditorAction
     SelectTool, FlipH, FlipV, Rotate, ShiftUp, ShiftDown, ShiftLeft, ShiftRight,
     MoveUp, MoveDown, MoveLeft, MoveRight,
     ClearSelection, ClearArea, SwapColors, ClearSprite,
-    ToolPencil, ToolFill, ToolPicker, ToolSelect, ToolStamp, ToolShape,
+    ToolPencil, ToolFill, ToolPicker, ToolSelect, ToolStamp, ToolShape, ToolEraser,
     BrushSmaller, BrushLarger,
 }
 
@@ -42,8 +42,9 @@ public static class SpriteEditorInputMap
         [SpriteEditorAction.ClearArea] = "Delete",
         [SpriteEditorAction.SwapColors] = "X",
         [SpriteEditorAction.ClearSprite] = "Ctrl+Delete",
-        [SpriteEditorAction.ToolPencil] = "P",
-        [SpriteEditorAction.ToolFill] = "B",
+        [SpriteEditorAction.ToolPencil] = "B",
+        [SpriteEditorAction.ToolFill] = "G",
+        [SpriteEditorAction.ToolEraser] = "E",
         [SpriteEditorAction.ToolPicker] = "I",
         [SpriteEditorAction.ToolSelect] = "Shift",
         [SpriteEditorAction.ToolStamp] = "T",
@@ -52,8 +53,9 @@ public static class SpriteEditorInputMap
 
     public static string GetTooltip(string toolId) => toolId switch
     {
-        "pencil" => "Pencil (P)",
-        "fill" => "Fill (B)",
+        "pencil" => "Brush (B)",
+        "fill" => "Fill (G)",
+        "eraser" => "Eraser (E)",
         "picker" => "Picker (I)",
         "select" => "Select (S / Shift)",
         "shape" => "Shape: Line/Rect/Circle (L)",

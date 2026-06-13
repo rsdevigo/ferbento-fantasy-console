@@ -26,6 +26,8 @@ public sealed class SpriteEditorContext
     public (int x, int y)? StampPreviewPosition { get; set; }
     public bool StampPreviewSkipTransparent { get; set; }
     public int BrushSize { get; set; } = 1;
+    public (int x, int y)? CursorPreviewPosition { get; set; }
+    public string? CursorPreviewTool { get; set; }
 
     public int DrawColor(PointerInput input) =>
         input.IsRightButton ? Palette.SecondaryColor : Palette.PrimaryColor;

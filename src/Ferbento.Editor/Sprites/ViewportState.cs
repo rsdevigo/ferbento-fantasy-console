@@ -17,7 +17,7 @@ public sealed class ViewportState : INotifyPropertyChanged
         get => _zoom;
         set
         {
-            _zoom = Math.Clamp(value, 1, 32);
+            _zoom = Math.Clamp(value, 1, 64);
             OnPropertyChanged();
             OnPropertyChanged(nameof(ZoomPercent));
         }

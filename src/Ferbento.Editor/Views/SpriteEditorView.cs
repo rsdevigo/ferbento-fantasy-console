@@ -162,6 +162,9 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         if (Ctrl.SelectedTool == "stamp" && Ctrl.Clipboard.HasContent && Ctrl.StampPreviewPosition is { } stampPos)
             DrawStampGhostOverlay(ptr, stride, zoom, vw, vh, stampPos.x, stampPos.y);
 
+        if (Ctrl.CursorPreviewPosition is { } cursorPos && Ctrl.CursorPreviewTool is { } cursorTool)
+            DrawCursorPreviewOverlay(ptr, stride, zoom, vw, vh, cursorPos.x, cursorPos.y, cursorTool);
+
         if (Ctrl.Viewport.GridVisible && zoom >= 4)
             DrawGridOverlay(ptr, stride, vw * zoom, Ctrl.TileSize * zoom);
 
@@ -189,6 +192,70 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
             var bgra = Pico8Colors.ToBgra(colorIndex, Ctrl.ColorChip);
             var ghost = (bgra & 0x00FFFFFFu) | 0xA0000000u;
             BlendPixelBlock(ptr, stride, destX, destY, zoom, ghost, viewW, viewH);
+        }
+    }
+
+    private void DrawCursorPreviewOverlay(nint ptr, int stride, int zoom, int viewW, int viewH, int anchorX, int anchorY, string tool)
+    {
+        var outline = tool == "eraser" ? 0xFFFFFFFFu : 0xFFFFFF00u;
+
+        if (tool is "pencil" or "eraser")
+        {
+            var size = Ctrl.BrushSize;
+            for (var dy = 0; dy < size; dy++)
+            for (var dx = 0; dx < size; dx++)
+            {
+                var px = anchorX + dx;
+                var py = anchorY + dy;
+                if (px < 0 || py < 0 || px >= viewW || py >= viewH) continue;
+
+                if (tool == "pencil")
+                {
+                    var bgra = Pico8Colors.ToBgra(Ctrl.PrimaryColor, Ctrl.ColorChip);
+                    var tint = (bgra & 0x00FFFFFFu) | 0x66000000u;
+                    BlendPixelBlock(ptr, stride, px, py, zoom, tint, viewW, viewH);
+                }
+
+                DrawPixelBlockOutline(ptr, stride, px, py, zoom, outline, viewW, viewH);
+            }
+            return;
+        }
+
+        if (tool is "fill" or "picker")
+        {
+            if (anchorX < 0 || anchorY < 0 || anchorX >= viewW || anchorY >= viewH) return;
+            DrawPixelBlockOutline(ptr, stride, anchorX, anchorY, zoom, outline, viewW, viewH);
+            DrawCrosshairInBlock(ptr, stride, anchorX, anchorY, zoom, outline, viewW, viewH);
+        }
+    }
+
+    private static unsafe void DrawPixelBlockOutline(nint ptr, int stride, int px, int py, int zoom, uint color, int maxW, int maxH)
+    {
+        if (px < 0 || py < 0 || px >= maxW || py >= maxH) return;
+        for (var zy = 0; zy < zoom; zy++)
+        for (var zx = 0; zx < zoom; zx++)
+        {
+            if (zy == 0 || zy == zoom - 1 || zx == 0 || zx == zoom - 1)
+            {
+                var offset = ((py * zoom + zy) * stride) + ((px * zoom + zx) * 4);
+                *(uint*)(ptr + offset) = color;
+            }
+        }
+    }
+
+    private static unsafe void DrawCrosshairInBlock(nint ptr, int stride, int px, int py, int zoom, uint color, int maxW, int maxH)
+    {
+        if (px < 0 || py < 0 || px >= maxW || py >= maxH) return;
+        var mid = zoom / 2;
+        for (var zx = 0; zx < zoom; zx++)
+        {
+            var offset = ((py * zoom + mid) * stride) + ((px * zoom + zx) * 4);
+            *(uint*)(ptr + offset) = color;
+        }
+        for (var zy = 0; zy < zoom; zy++)
+        {
+            var offset = ((py * zoom + zy) * stride) + ((px * zoom + mid) * 4);
+            *(uint*)(ptr + offset) = color;
         }
     }
 
@@ -426,29 +493,41 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
 
         sidebar.Children.Add(new TextBlock { Text = "Tools", Foreground = Brushes.LightGray, FontSize = 11 });
         _toolsPanel = new WrapPanel { Width = 220 };
-        foreach (var (tool, label) in new (string, string)[]
+        foreach (var entry in new (string tool, string? label, Func<Control>? icon)[]
         {
-            ("pencil", "✏"), ("fill", "🪣"), ("picker", "💧"), ("select", "⬚"),
-            ("shape", "◇"), ("stamp", "📌"),
-            ("flip-h", "↔"), ("flip-v", "↕"), ("rotate", "↻"),
+            ("pencil", null, SpriteToolIcons.CreateBrushIcon),
+            ("eraser", null, SpriteToolIcons.CreateEraserIcon),
+            ("fill", "🪣", null),
+            ("picker", "💧", null),
+            ("select", "⬚", null),
+            ("shape", "◇", null),
+            ("stamp", "📌", null),
+            ("flip-h", "↔", null),
+            ("flip-v", "↕", null),
+            ("rotate", "↻", null),
         })
         {
-            var tip = SpriteEditorInputMap.GetTooltip(tool);
+            var tip = SpriteEditorInputMap.GetTooltip(entry.tool);
+            Control child = entry.icon != null
+                ? entry.icon()
+                : new TextBlock
+                {
+                    Text = entry.label,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    FontSize = 14,
+                };
             var btn = new Border
             {
                 Width = 36, Height = 28,
                 Background = new SolidColorBrush(Color.Parse("#333337")),
                 BorderBrush = Brushes.Transparent,
                 BorderThickness = new Thickness(1),
-                Child = new TextBlock
-                {
-                    Text = label, HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center, FontSize = 14,
-                },
-                Tag = tool, Margin = new Thickness(2),
+                Child = child,
+                Tag = entry.tool, Margin = new Thickness(2),
             };
             ToolTip.SetTip(btn, tip);
-            btn.PointerPressed += (_, _) => SelectTool(tool);
+            btn.PointerPressed += (_, _) => SelectTool(entry.tool);
             _toolsPanel.Children.Add(btn);
         }
         sidebar.Children.Add(_toolsPanel);
@@ -645,7 +724,7 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
             return;
         }
 
-        if (_isRightButton && Ctrl.SelectedTool == "pencil")
+        if (_isRightButton && Ctrl.SelectedTool is "pencil" or "eraser")
         {
             Ctrl.HandleEyedropper(input);
             return;
@@ -662,9 +741,15 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         var y = (int)(pt.Y / zoom);
         var input = BuildInput(x, y, isStart: false);
 
-        if (!_isDrawing && Ctrl.SelectedTool == "stamp" && Ctrl.Clipboard.HasContent && !Ctrl.IsSpaceHeld)
+        if (!_isDrawing && !Ctrl.IsSpaceHeld)
         {
-            Ctrl.UpdateStampPreview(input);
+            if (Ctrl.SelectedTool == "stamp" && Ctrl.Clipboard.HasContent)
+            {
+                Ctrl.UpdateStampPreview(input);
+                return;
+            }
+
+            Ctrl.UpdateCursorPreview(input);
             return;
         }
 
@@ -679,8 +764,11 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         Ctrl.OnPointerMove(input);
     }
 
-    private void OnCanvasPointerExited(object? sender, PointerEventArgs e) =>
+    private void OnCanvasPointerExited(object? sender, PointerEventArgs e)
+    {
         Ctrl.ClearStampPreview();
+        Ctrl.ClearCursorPreview();
+    }
 
     private void OnCanvasWheel(object? sender, PointerWheelEventArgs e)
     {

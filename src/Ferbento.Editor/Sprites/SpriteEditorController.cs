@@ -59,6 +59,8 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
             if (_selectedTool == value) return;
             if (value != "stamp")
                 StampTool.ClearPreview(_ctx);
+            if (!SupportsCursorPreview(value))
+                ClearCursorPreview();
             _selectedTool = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(ActiveToolLabel));
@@ -68,6 +70,8 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
     public ShapeMode ShapeMode => _shapeHost.Mode;
     public (int x, int y)? StampPreviewPosition => _ctx.StampPreviewPosition;
     public bool StampPreviewSkipTransparent => _ctx.StampPreviewSkipTransparent;
+    public (int x, int y)? CursorPreviewPosition => _ctx.CursorPreviewPosition;
+    public string? CursorPreviewTool => _ctx.CursorPreviewTool;
 
     public string ActiveToolLabel =>
         _selectedTool == "shape" ? $"shape ({_shapeHost.Mode})" : _selectedTool;
@@ -115,7 +119,7 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
             var view = ViewWidth == ViewHeight && ViewWidth == TileSize
                 ? $"{TileSize}×{TileSize}"
                 : $"{ViewWidth}×{ViewHeight}";
-            var brush = SelectedTool == "pencil" ? $" | Brush {BrushSize}×{BrushSize}" : "";
+            var brush = SelectedTool is "pencil" or "eraser" ? $" | Brush {BrushSize}×{BrushSize}" : "";
             return $"Zoom {Viewport.ZoomPercent}% | {view}{brush} | Color {PrimaryColor}/{SecondaryColor} | {ActiveToolLabel}";
         }
     }
@@ -125,6 +129,7 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
         _tools = new Dictionary<string, ISpriteTool>
         {
             ["pencil"] = new PencilTool(),
+            ["eraser"] = new EraserTool(),
             ["fill"] = new FillTool(),
             ["picker"] = new PickerTool(),
             ["select"] = new SelectionTool(),
@@ -309,6 +314,30 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
 
     public void ClearStampPreview() => StampTool.ClearPreview(_ctx);
 
+    private static bool SupportsCursorPreview(string tool) =>
+        tool is "pencil" or "eraser" or "fill" or "picker";
+
+    public void UpdateCursorPreview(PointerInput input)
+    {
+        if (!SupportsCursorPreview(_selectedTool))
+        {
+            ClearCursorPreview();
+            return;
+        }
+
+        _ctx.CursorPreviewPosition = (input.LocalX, input.LocalY);
+        _ctx.CursorPreviewTool = _selectedTool;
+        RequestRefresh();
+    }
+
+    public void ClearCursorPreview()
+    {
+        if (_ctx.CursorPreviewPosition == null) return;
+        _ctx.CursorPreviewPosition = null;
+        _ctx.CursorPreviewTool = null;
+        RequestRefresh();
+    }
+
     public void RefreshStampPreviewModifiers(bool ctrlHeld)
     {
         if (SelectedTool != "stamp" || _ctx.StampPreviewPosition == null) return;
@@ -383,8 +412,9 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
         if (key == "Return") return SpriteEditorAction.ClearSelection;
         if (key == "Delete" || key == "Back") return SpriteEditorAction.ClearArea;
         if (key == "X" && !ctrl) return SpriteEditorAction.SwapColors;
-        if (key == "P") return SpriteEditorAction.ToolPencil;
-        if (key == "B") return SpriteEditorAction.ToolFill;
+        if (key == "B") return SpriteEditorAction.ToolPencil;
+        if (key == "G" && !ctrl) return SpriteEditorAction.ToolFill;
+        if (key == "E") return SpriteEditorAction.ToolEraser;
         if (key == "I") return SpriteEditorAction.ToolPicker;
         if (key == "T") return SpriteEditorAction.ToolStamp;
         if (key == "L") return SpriteEditorAction.ToolShape;
@@ -446,6 +476,7 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
             case SpriteEditorAction.ClearSprite: ClearSprite(); return true;
             case SpriteEditorAction.ToolPencil: SelectedTool = "pencil"; return true;
             case SpriteEditorAction.ToolFill: SelectedTool = "fill"; return true;
+            case SpriteEditorAction.ToolEraser: SelectedTool = "eraser"; return true;
             case SpriteEditorAction.ToolPicker: SelectedTool = "picker"; return true;
             case SpriteEditorAction.ToolStamp: SelectedTool = "stamp"; return true;
             case SpriteEditorAction.ToolShape:
@@ -453,10 +484,10 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
                 else SelectedTool = "shape";
                 return true;
             case SpriteEditorAction.BrushSmaller:
-                AdjustBrushSize(-1);
+                if (SelectedTool is "pencil" or "eraser") AdjustBrushSize(-1);
                 return true;
             case SpriteEditorAction.BrushLarger:
-                AdjustBrushSize(1);
+                if (SelectedTool is "pencil" or "eraser") AdjustBrushSize(1);
                 return true;
         }
         return false;
