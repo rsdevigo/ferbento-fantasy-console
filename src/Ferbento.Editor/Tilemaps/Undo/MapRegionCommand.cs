@@ -24,8 +24,8 @@ public sealed class MapRegionCommand : IUndoCommand
         _y = y;
         _w = w;
         _h = h;
-        _before = before;
-        _after = after;
+        _before = (byte[])before.Clone();
+        _after = (byte[])after.Clone();
         _layer = layer;
         Name = "map";
     }

@@ -55,7 +55,7 @@ public sealed class MapDocument
             var my = y + row;
             if (mx < 0 || my < 0 || mx >= MapWidth || my >= MapHeight) continue;
             _bus.Tilemap.MSet(mx, my, data[idx]);
-            if (setLayerFlags)
+            if (setLayerFlags && data[idx] != 0)
                 SetLayerFlag(data[idx], currentLayer, true);
         }
     }
@@ -70,7 +70,8 @@ public sealed class MapDocument
     {
         if (_bus == null || mapX < 0 || mapY < 0 || mapX >= MapWidth || mapY >= MapHeight) return;
         _bus.Tilemap.MSet(mapX, mapY, tileId);
-        if (setLayerFlag)
+        // Tile 0 is the empty map default; enabling its layer flag would reveal sprite 0 on every cell.
+        if (setLayerFlag && tileId != 0)
             SetLayerFlag(tileId, currentLayer, true);
     }
 

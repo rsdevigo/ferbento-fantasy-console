@@ -8,6 +8,7 @@ public sealed class FillTool : ITilemapTool
 
     public void OnPointerDown(TilemapEditorContext ctx, TilePointerInput input)
     {
+        ctx.CancelStroke();
         if (!PaintTool.InMap(ctx, input.TileX, input.TileY)) return;
         FloodFill(ctx, input.TileX, input.TileY);
     }

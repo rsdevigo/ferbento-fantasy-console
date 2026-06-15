@@ -19,7 +19,7 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
     private readonly TilemapEditorContext _ctx;
     private HardwareProfile _profile = HardwareProfile.Pico8();
     private string _selectedTool = "pencil";
-    private int _selectedTile;
+    private int _selectedTile = 1;
     private int _currentLayer;
     private int _spriteBank;
     private int _hoverMapX = -1;
@@ -54,7 +54,14 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
     public string SelectedTool
     {
         get => _selectedTool;
-        set { _selectedTool = value; OnPropertyChanged(); OnPropertyChanged(nameof(StatusText)); }
+        set
+        {
+            if (_selectedTool == value) return;
+            _ctx.CancelStroke();
+            _selectedTool = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(StatusText));
+        }
     }
 
     public int SelectedTile

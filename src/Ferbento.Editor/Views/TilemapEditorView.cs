@@ -128,9 +128,9 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
         }
 
         var undoBtn = new Button { Content = "Undo", FontSize = 11, Padding = new Thickness(6, 2) };
-        undoBtn.Click += (_, _) => _ctrl.HandleKey("Z", true, false, false);
+        undoBtn.Click += (_, _) => { _ctrl.HandleKey("Z", true, false, false); RefreshAll(); };
         var redoBtn = new Button { Content = "Redo", FontSize = 11, Padding = new Thickness(6, 2) };
-        redoBtn.Click += (_, _) => _ctrl.HandleKey("Y", true, false, false);
+        redoBtn.Click += (_, _) => { _ctrl.HandleKey("Y", true, false, false); RefreshAll(); };
         _chrome.ContextStrip.Children.Add(undoBtn);
         _chrome.ContextStrip.Children.Add(redoBtn);
     }
@@ -220,7 +220,7 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
         if (!vp.IsOnBitmap(mapX, mapY)) return;
 
         var (tileScreenX, tileScreenY) = TileScreenOrigin(vp, mapX, mapY);
-        DrawTileOutlineScreen(ptr, stride, tileScreenX, tileScreenY, tile, zoom, 0xFFFFFF00u);
+        DrawTileOutlineScreen(ptr, stride, tileScreenX, tileScreenY, tile, zoom, vp.BitmapWidth, vp.BitmapHeight, 0xFFFFFF00u);
 
         if (_bus == null) return;
         var tileId = _ctrl.SelectedTile;
@@ -237,7 +237,7 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
             if (ci == transparent) continue;
             var bgra = Pico8Colors.ToBgra(ci, _ctrl.ColorChip, MapTileRenderColors.Checkerboard(mapX, mapY));
             var ghost = (bgra & 0x00FFFFFFu) | 0x88000000u;
-            BlendBlockScreen(ptr, stride, tileScreenX + px * zoom, tileScreenY + py * zoom, zoom, ghost);
+            BlendBlockScreen(ptr, stride, tileScreenX + px * zoom, tileScreenY + py * zoom, zoom, vp.BitmapWidth, vp.BitmapHeight, ghost);
         }
     }
 
@@ -248,39 +248,38 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
         return (x, y);
     }
 
-    private static unsafe void DrawTileOutlineScreen(nint ptr, int stride, int x, int y, int tile, int zoom, uint color)
+    private static unsafe void DrawTileOutlineScreen(nint ptr, int stride, int x, int y, int tile, int zoom, int maxW, int maxH, uint color)
     {
         var w = tile * zoom;
         var h = tile * zoom;
         for (var dx = 0; dx < w; dx++)
         {
-            PutPixel(ptr, stride, x + dx, y, color);
-            PutPixel(ptr, stride, x + dx, y + h - 1, color);
+            PutPixel(ptr, stride, x + dx, y, maxW, maxH, color);
+            PutPixel(ptr, stride, x + dx, y + h - 1, maxW, maxH, color);
         }
         for (var dy = 0; dy < h; dy++)
         {
-            PutPixel(ptr, stride, x, y + dy, color);
-            PutPixel(ptr, stride, x + w - 1, y + dy, color);
+            PutPixel(ptr, stride, x, y + dy, maxW, maxH, color);
+            PutPixel(ptr, stride, x + w - 1, y + dy, maxW, maxH, color);
         }
     }
 
-    private static unsafe void PutPixel(nint ptr, int stride, int x, int y, uint color)
+    private static unsafe void PutPixel(nint ptr, int stride, int x, int y, int maxW, int maxH, uint color)
     {
-        if (x < 0 || y < 0) return;
+        if (x < 0 || y < 0 || x >= maxW || y >= maxH) return;
         *(uint*)(ptr + y * stride + x * 4) = color;
     }
 
-    private static unsafe void BlendBlockScreen(nint ptr, int stride, int x, int y, int zoom, uint fg)
+    private static unsafe void BlendBlockScreen(nint ptr, int stride, int x, int y, int zoom, int maxW, int maxH, uint fg)
     {
         for (var zy = 0; zy < zoom; zy++)
         for (var zx = 0; zx < zoom; zx++)
         {
             var px = x + zx;
             var py = y + zy;
-            if (px < 0 || py < 0) continue;
+            if (px < 0 || py < 0 || px >= maxW || py >= maxH) continue;
             var offset = py * stride + px * 4;
-            var bg = *(uint*)(ptr + offset);
-            *(uint*)(ptr + offset) = Blend(bg, fg);
+            *(uint*)(ptr + offset) = Blend(*(uint*)(ptr + offset), fg);
         }
     }
 
@@ -305,12 +304,14 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
     {
         var (tileScreenX, tileScreenY) = TileScreenOrigin(vp, mapX, mapY);
         var tileId = _bus!.Tilemap.MGet(mapX, mapY);
-        if (_bus.Sprite.FGet(tileId, _ctrl.CurrentLayer) == 0)
+        var maxW = vp.BitmapWidth;
+        var maxH = vp.BitmapHeight;
+        if (tileId == 0)
         {
             var bg = MapTileRenderColors.Checkerboard(mapX, mapY);
-            FillBlockScreen(ptr, stride, tileScreenX, tileScreenY, zoom, tile, bg);
+            FillBlockScreen(ptr, stride, tileScreenX, tileScreenY, zoom, tile, maxW, maxH, bg);
             if (_ctrl.Viewport.HexView)
-                DrawHexDigit(ptr, stride, tileScreenX, tileScreenY, tileId);
+                DrawHexDigit(ptr, stride, tileScreenX, tileScreenY, maxW, maxH, tileId);
             return;
         }
 
@@ -323,43 +324,42 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
         {
             var ci = _bus.Sprite.SGet(sx + px, sy + py);
             var color = MapTileRenderColors.SpritePixel(ci, mapX, mapY, _ctrl.ColorChip);
-            FillBlockScreen(ptr, stride, tileScreenX + px * zoom, tileScreenY + py * zoom, zoom, 1, color);
+            FillBlockScreen(ptr, stride, tileScreenX + px * zoom, tileScreenY + py * zoom, zoom, 1, maxW, maxH, color);
         }
         if (_ctrl.Viewport.HexView)
-            DrawHexDigit(ptr, stride, tileScreenX, tileScreenY, tileId);
+            DrawHexDigit(ptr, stride, tileScreenX, tileScreenY, maxW, maxH, tileId);
     }
 
-    private static void DrawHexDigit(nint ptr, int stride, int px, int py, int value)
+    private static void DrawHexDigit(nint ptr, int stride, int px, int py, int maxW, int maxH, int value)
     {
         unsafe
         {
-            *(uint*)(ptr + py * stride + px * 4) = 0xFFCCCCCC;
-            if (px + 4 < stride / 4)
-                *(uint*)(ptr + py * stride + (px + 4) * 4) = (uint)(0xFF000000 | ((value & 0xF0) << 16) | ((value & 0x0F) << 8));
+            PutPixel(ptr, stride, px, py, maxW, maxH, 0xFFCCCCCC);
+            if (px + 4 < maxW)
+                PutPixel(ptr, stride, px + 4, py, maxW, maxH, (uint)(0xFF000000 | ((value & 0xF0) << 16) | ((value & 0x0F) << 8)));
         }
     }
 
-    private void DrawSelection(nint ptr, int stride, (int x, int y, int w, int h) sel, MapEditorViewport vp)
+    private unsafe void DrawSelection(nint ptr, int stride, (int x, int y, int w, int h) sel, MapEditorViewport vp)
     {
         var color = 0xFFFFCC00u;
         var tile = _ctrl.TileSize;
         var zoom = _ctrl.Viewport.Zoom;
+        var maxW = vp.BitmapWidth;
+        var maxH = vp.BitmapHeight;
         var left = (sel.x - vp.StartMapX) * vp.CellPixels - vp.SubPixelOffsetX;
         var top = (sel.y - vp.StartMapY) * vp.CellPixels - vp.SubPixelOffsetY;
         var right = left + sel.w * tile * zoom;
         var bottom = top + sel.h * tile * zoom;
-        unsafe
+        for (var x = left; x < right; x++)
         {
-            for (var x = left; x < right; x++)
-            {
-                PutPixel(ptr, stride, x, top, color);
-                PutPixel(ptr, stride, x, bottom - 1, color);
-            }
-            for (var y = top; y < bottom; y++)
-            {
-                PutPixel(ptr, stride, left, y, color);
-                PutPixel(ptr, stride, right - 1, y, color);
-            }
+            PutPixel(ptr, stride, x, top, maxW, maxH, color);
+            PutPixel(ptr, stride, x, bottom - 1, maxW, maxH, color);
+        }
+        for (var y = top; y < bottom; y++)
+        {
+            PutPixel(ptr, stride, left, y, maxW, maxH, color);
+            PutPixel(ptr, stride, right - 1, y, maxW, maxH, color);
         }
     }
 
@@ -417,6 +417,7 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
 
         _isPainting = true;
         _ctrl.HandlePointerDown(tx, ty, ctrl, shift, e.GetCurrentPoint(_mapImage).Properties.IsRightButtonPressed);
+        RebuildMapBitmap();
     }
 
     private void OnMapMoved(object? sender, PointerEventArgs e)
@@ -436,6 +437,7 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
         if (!_isPainting) return;
         var (mapX, mapY) = MapCoords(e);
         _ctrl.HandlePointerMove(mapX, mapY, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+        RebuildMapBitmap();
     }
 
     private void OnMapReleased(object? sender, PointerReleasedEventArgs e)
@@ -445,6 +447,7 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
         var (tx, ty) = MapCoords(e);
         _ctrl.HandlePointerUp(tx, ty, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
         _isPainting = false;
+        RebuildMapBitmap();
     }
 
     private void OnMapWheel(object? sender, PointerWheelEventArgs e)
@@ -527,12 +530,12 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
             *(uint*)(ptr + y * stride + x * 4) = color;
     }
 
-    private static unsafe void FillBlockScreen(nint ptr, int stride, int screenX, int screenY, int zoom, int blockSize, uint color)
+    private static unsafe void FillBlockScreen(nint ptr, int stride, int screenX, int screenY, int zoom, int blockSize, int maxW, int maxH, uint color)
     {
         for (var ty = 0; ty < blockSize; ty++)
         for (var tx = 0; tx < blockSize; tx++)
         for (var zy = 0; zy < zoom; zy++)
         for (var zx = 0; zx < zoom; zx++)
-            PutPixel(ptr, stride, screenX + (tx * zoom) + zx, screenY + (ty * zoom) + zy, color);
+            PutPixel(ptr, stride, screenX + (tx * zoom) + zx, screenY + (ty * zoom) + zy, maxW, maxH, color);
     }
 }
