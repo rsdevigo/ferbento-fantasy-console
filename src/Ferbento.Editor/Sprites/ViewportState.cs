@@ -5,19 +5,34 @@ namespace Ferbento.Editor.Sprites;
 
 public sealed class ViewportState : INotifyPropertyChanged
 {
+    private const int AbsoluteMaxZoom = 64;
+
     private int _zoom = 16;
+    private int _maxZoom = AbsoluteMaxZoom;
     private int _panX;
     private int _panY;
     private bool _gridVisible = true;
     private bool _fullscreen;
     private bool _hexView;
 
+    public int MaxZoom
+    {
+        get => _maxZoom;
+        set
+        {
+            _maxZoom = Math.Clamp(value, 1, AbsoluteMaxZoom);
+            if (_zoom > _maxZoom)
+                Zoom = _maxZoom;
+            OnPropertyChanged();
+        }
+    }
+
     public int Zoom
     {
         get => _zoom;
         set
         {
-            _zoom = Math.Clamp(value, 1, 64);
+            _zoom = Math.Clamp(value, 1, MaxZoom);
             OnPropertyChanged();
             OnPropertyChanged(nameof(ZoomPercent));
         }

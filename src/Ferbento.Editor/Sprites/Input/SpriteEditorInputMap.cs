@@ -49,6 +49,8 @@ public static class SpriteEditorInputMap
         [SpriteEditorAction.ToolSelect] = "Shift",
         [SpriteEditorAction.ToolStamp] = "T",
         [SpriteEditorAction.ToolShape] = "L",
+        [SpriteEditorAction.BrushSmaller] = "OemOpenBrackets",
+        [SpriteEditorAction.BrushLarger] = "OemCloseBrackets",
     };
 
     public static string GetTooltip(string toolId) => toolId switch

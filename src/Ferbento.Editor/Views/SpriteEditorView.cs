@@ -2,15 +2,19 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using Ferbento.Core.Chips;
-using Ferbento.Editor.Sprites;
+using Ferbento.Editor.Chrome;
 using Ferbento.Editor.Sprites.Input;
 using Ferbento.Editor.Sprites.Tools;
+using Ferbento.Editor.Sprites;
 using Ferbento.Editor.ViewModels;
+
 using Ferbento.Profiles.Models;
 
 namespace Ferbento.Editor.Views;
@@ -20,16 +24,20 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
     private readonly SpriteEditorViewModel _vm = new();
     private SpriteEditorController Ctrl => _vm.Controller;
 
+    public SpriteEditorController Controller => _vm.Controller;
+
     private WriteableBitmap? _canvasBitmap;
     private WriteableBitmap? _sheetBitmap;
     private Image _canvasImage = null!;
     private Image _sheetImage = null!;
     private TextBlock _spriteLabel = null!;
-    private TextBlock _statusBar = null!;
+    private EditorStatusBar _statusBar = null!;
+    private EditorToolStrip _toolStrip = null!;
+    private EditorChrome _chrome = null!;
     private Panel _palettePanel = null!;
     private Panel _flagsPanel = null!;
-    private Panel _toolsPanel = null!;
     private Border _canvasBorder = null!;
+    private Border _canvasHost = null!;
     private Action? _onEdited;
 
     private bool _isDrawing;
@@ -37,6 +45,10 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
     private bool _sheetDragging;
     private int _sheetDragStartX;
     private int _sheetDragStartY;
+    private bool _rebuildingCanvas;
+    private bool _rebuildingSheet;
+    private bool _visualRefreshQueued;
+    private bool _pendingCanvasRebuild;
     private KeyModifiers _keyModifiers;
 
     private const int SheetZoom = 2;
@@ -47,7 +59,11 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
     {
         DataContext = _vm;
         Content = BuildLayout();
-        Loaded += (_, _) => RebuildBitmaps();
+        Loaded += (_, _) =>
+        {
+            RebuildBitmaps();
+            UpdateCanvasPanelSize();
+        };
         Focusable = true;
 
         Ctrl.Edited += () => _onEdited?.Invoke();
@@ -57,7 +73,7 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         {
             UpdateStatusBar();
             if (e.PropertyName is nameof(ViewportState.Zoom) or nameof(ViewportState.ZoomPercent))
-                RebuildBitmaps();
+                QueueVisualRefresh(rebuildCanvas: true);
         };
 
         Ctrl.PropertyChanged += (_, e) =>
@@ -76,18 +92,21 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
                 or nameof(SpriteEditorController.BrushSize)
                 or nameof(SpriteEditorController.StatusText))
             {
+                var rebuildCanvas = e.PropertyName is nameof(SpriteEditorController.ViewWidth)
+                    or nameof(SpriteEditorController.ViewHeight)
+                    or nameof(SpriteEditorController.TileSize);
+
                 if (e.PropertyName is nameof(SpriteEditorController.TileSize)
                     or nameof(SpriteEditorController.SheetWidth)
                     or nameof(SpriteEditorController.SheetHeight)
-                    or nameof(SpriteEditorController.PaletteCount)
-                    or nameof(SpriteEditorController.ViewWidth)
-                    or nameof(SpriteEditorController.ViewHeight))
+                    or nameof(SpriteEditorController.PaletteCount))
                 {
                     RebuildPaletteSwatches();
-                    RebuildBitmaps();
+                    RebuildSheetBitmap();
+                    rebuildCanvas = true;
                 }
-                RefreshCanvas();
-                RefreshSheet();
+
+                QueueVisualRefresh(rebuildCanvas);
                 UpdateSpriteLabel();
                 UpdatePaletteHighlight();
                 UpdateToolHighlight();
@@ -97,12 +116,31 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
                 RefreshFlagToggles();
         };
 
-        KeyDown += OnKeyDown;
-        KeyUp += OnKeyUp;
+        EditorKeyboardRouting.Attach(this, OnKeyDown, OnKeyUp, OnTextInput);
+        Loaded += (_, _) => Focus();
     }
 
-    private void OnRefreshRequested()
+    private void OnRefreshRequested() => QueueVisualRefresh(rebuildCanvas: false);
+
+    private void QueueVisualRefresh(bool rebuildCanvas)
     {
+        if (rebuildCanvas)
+            _pendingCanvasRebuild = true;
+        if (_visualRefreshQueued) return;
+        _visualRefreshQueued = true;
+        Dispatcher.UIThread.Post(ApplyQueuedVisualRefresh, DispatcherPriority.Background);
+    }
+
+    private void ApplyQueuedVisualRefresh()
+    {
+        _visualRefreshQueued = false;
+        if (_pendingCanvasRebuild)
+        {
+            _pendingCanvasRebuild = false;
+            RebuildCanvasBitmap();
+            UpdateCanvasViewportSize();
+        }
+
         RefreshCanvas();
         RefreshSheet();
         UpdateStatusBar();
@@ -115,21 +153,84 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
 
     private void RebuildBitmaps()
     {
-        var vw = Ctrl.ViewWidth;
-        var vh = Ctrl.ViewHeight;
-        var zoom = Ctrl.Viewport.Zoom;
-        _canvasBitmap?.Dispose();
-        _sheetBitmap?.Dispose();
-        _canvasBitmap = new WriteableBitmap(
-            new PixelSize(vw * zoom, vh * zoom),
-            new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
-        _sheetBitmap = new WriteableBitmap(
-            new PixelSize(Ctrl.SheetWidth * SheetZoom, Ctrl.SheetHeight * SheetZoom),
-            new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
-        _canvasImage.Source = _canvasBitmap;
-        _sheetImage.Source = _sheetBitmap;
+        RebuildCanvasBitmap();
+        RebuildSheetBitmap();
+        UpdateCanvasViewportSize();
         RefreshCanvas();
         RefreshSheet();
+    }
+
+    private PixelSize CanvasBitmapPixelSize()
+    {
+        var vw = Math.Max(1, Ctrl.ViewWidth);
+        var vh = Math.Max(1, Ctrl.ViewHeight);
+        var zoom = Math.Max(1, Ctrl.Viewport.Zoom);
+        return new PixelSize(vw * zoom, vh * zoom);
+    }
+
+    private void UpdateCanvasPanelSize()
+    {
+        var w = _canvasHost.Bounds.Width;
+        var h = _canvasHost.Bounds.Height;
+        if (w <= 0 || h <= 0) return;
+        Ctrl.SetCanvasPanelSize(w, h);
+    }
+
+    private void UpdateCanvasViewportSize()
+    {
+        var size = CanvasBitmapPixelSize();
+        _canvasBorder.Width = size.Width;
+        _canvasBorder.Height = size.Height;
+        _canvasImage.Width = size.Width;
+        _canvasImage.Height = size.Height;
+    }
+
+    private void RebuildCanvasBitmap()
+    {
+        if (_rebuildingCanvas) return;
+        _rebuildingCanvas = true;
+        try
+        {
+            var expected = CanvasBitmapPixelSize();
+            if (_canvasBitmap?.PixelSize == expected) return;
+
+            var old = _canvasBitmap;
+            _canvasImage.Source = null;
+            old?.Dispose();
+            _canvasBitmap = new WriteableBitmap(
+                expected,
+                new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
+            _canvasImage.Source = _canvasBitmap;
+        }
+        finally
+        {
+            _rebuildingCanvas = false;
+        }
+    }
+
+    private void RebuildSheetBitmap()
+    {
+        if (_rebuildingSheet) return;
+        _rebuildingSheet = true;
+        try
+        {
+            var sw = Math.Max(1, Ctrl.SheetWidth);
+            var sh = Math.Max(1, Ctrl.SheetHeight);
+            var expected = new PixelSize(sw * SheetZoom, sh * SheetZoom);
+            if (_sheetBitmap?.PixelSize == expected) return;
+
+            var old = _sheetBitmap;
+            _sheetImage.Source = null;
+            old?.Dispose();
+            _sheetBitmap = new WriteableBitmap(
+                expected,
+                new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
+            _sheetImage.Source = _sheetBitmap;
+        }
+        finally
+        {
+            _rebuildingSheet = false;
+        }
     }
 
     private void RefreshCanvas()
@@ -138,35 +239,45 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         var vw = Ctrl.ViewWidth;
         var vh = Ctrl.ViewHeight;
         var zoom = Ctrl.Viewport.Zoom;
-        var expected = new PixelSize(vw * zoom, vh * zoom);
-        if (_canvasBitmap.PixelSize != expected)
+        if (vw <= 0 || vh <= 0) return;
+
+        UpdateCanvasViewportSize();
+
+        if (_canvasBitmap.PixelSize != CanvasBitmapPixelSize())
         {
-            RebuildBitmaps();
+            QueueVisualRefresh(rebuildCanvas: true);
             return;
         }
 
-        using var locked = _canvasBitmap.Lock();
-        var stride = locked.RowBytes;
-        var ptr = locked.Address;
-
-        for (var y = 0; y < vh; y++)
-        for (var x = 0; x < vw; x++)
+        using (var locked = _canvasBitmap.Lock())
         {
-            var color = Pico8Colors.ToBgra(Ctrl.GetPixel(x, y), Ctrl.ColorChip);
-            FillPixelBlock(ptr, stride, x, y, zoom, color, vw, vh);
+            var stride = locked.RowBytes;
+            var ptr = locked.Address;
+            var pixelW = locked.Size.Width;
+            var pixelH = locked.Size.Height;
+            var bg = Pico8Colors.ToBgra(0, Ctrl.ColorChip);
+
+            ClearBitmap(ptr, stride, pixelW, pixelH, bg);
+
+            for (var y = 0; y < vh; y++)
+            for (var x = 0; x < vw; x++)
+            {
+                var color = Pico8Colors.ToBgra(Ctrl.GetPixel(x, y), Ctrl.ColorChip);
+                FillPixelBlock(ptr, stride, x, y, zoom, color, vw, vh);
+            }
+
+            if (Ctrl.Selection.HasPixelSelection)
+                DrawSelectionOverlay(ptr, stride, zoom, vw, vh);
+
+            if (Ctrl.SelectedTool == "stamp" && Ctrl.Clipboard.HasContent && Ctrl.StampPreviewPosition is { } stampPos)
+                DrawStampGhostOverlay(ptr, stride, zoom, vw, vh, stampPos.x, stampPos.y);
+
+            if (Ctrl.CursorPreviewPosition is { } cursorPos && Ctrl.CursorPreviewTool is { } cursorTool)
+                DrawCursorPreviewOverlay(ptr, stride, zoom, vw, vh, cursorPos.x, cursorPos.y, cursorTool);
+
+            if (Ctrl.Viewport.GridVisible && zoom >= 4)
+                DrawGridOverlay(ptr, stride, vw * zoom, Ctrl.TileSize * zoom);
         }
-
-        if (Ctrl.Selection.HasPixelSelection)
-            DrawSelectionOverlay(ptr, stride, zoom, vw, vh);
-
-        if (Ctrl.SelectedTool == "stamp" && Ctrl.Clipboard.HasContent && Ctrl.StampPreviewPosition is { } stampPos)
-            DrawStampGhostOverlay(ptr, stride, zoom, vw, vh, stampPos.x, stampPos.y);
-
-        if (Ctrl.CursorPreviewPosition is { } cursorPos && Ctrl.CursorPreviewTool is { } cursorTool)
-            DrawCursorPreviewOverlay(ptr, stride, zoom, vw, vh, cursorPos.x, cursorPos.y, cursorTool);
-
-        if (Ctrl.Viewport.GridVisible && zoom >= 4)
-            DrawGridOverlay(ptr, stride, vw * zoom, Ctrl.TileSize * zoom);
 
         _canvasImage.InvalidateVisual();
     }
@@ -263,10 +374,12 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
     {
         var sel = Ctrl.Selection;
         var overlay = 0x80FFFF00u;
-        var left = Math.Clamp(sel.PixelX, 0, viewW - 1);
-        var top = Math.Clamp(sel.PixelY, 0, viewH - 1);
-        var right = Math.Clamp(sel.PixelX + sel.PixelWidth - 1, 0, viewW - 1);
-        var bottom = Math.Clamp(sel.PixelY + sel.PixelHeight - 1, 0, viewH - 1);
+        var maxX = Math.Max(0, viewW - 1);
+        var maxY = Math.Max(0, viewH - 1);
+        var left = Math.Clamp(sel.PixelX, 0, maxX);
+        var top = Math.Clamp(sel.PixelY, 0, maxY);
+        var right = Math.Clamp(sel.PixelX + sel.PixelWidth - 1, 0, maxX);
+        var bottom = Math.Clamp(sel.PixelY + sel.PixelHeight - 1, 0, maxY);
         for (var y = top; y <= bottom; y++)
         for (var x = left; x <= right; x++)
         {
@@ -290,39 +403,51 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         var sw = Ctrl.SheetWidth;
         var sh = Ctrl.SheetHeight;
 
-        using var locked = _sheetBitmap.Lock();
-        var stride = locked.RowBytes;
-        var ptr = locked.Address;
-
-        for (var y = 0; y < sh; y++)
-        for (var x = 0; x < sw; x++)
+        using (var locked = _sheetBitmap.Lock())
         {
-            var color = Pico8Colors.ToBgra(Ctrl.ReadSheetPixel(x, y), Ctrl.ColorChip);
-            FillPixelBlock(ptr, stride, x, y, SheetZoom, color, sw, sh);
+            var stride = locked.RowBytes;
+            var ptr = locked.Address;
+
+            for (var y = 0; y < sh; y++)
+            for (var x = 0; x < sw; x++)
+            {
+                var color = Pico8Colors.ToBgra(Ctrl.ReadSheetPixel(x, y), Ctrl.ColorChip);
+                FillPixelBlock(ptr, stride, x, y, SheetZoom, color, sw, sh);
+            }
+
+            var (vx, vy) = Ctrl.Document.ViewOriginSheet;
+            var tile = Ctrl.TileSize;
+            if (Ctrl.ViewWidth > tile || Ctrl.ViewHeight > tile)
+                HighlightRegionRect(ptr, stride, vx, vy, Ctrl.ViewWidth, Ctrl.ViewHeight, SheetZoom, 0xFFFFCC00, sw, sh);
+            else
+                HighlightSpriteRect(ptr, stride, vx, vy, tile, SheetZoom, 0xFFFFCC00, sw, sh);
+
+            foreach (var idx in Ctrl.Selection.SpriteIndices)
+            {
+                var (sx, sy) = Ctrl.Document.SpriteOriginFor(idx);
+                HighlightSpriteRect(ptr, stride, sx, sy, Ctrl.TileSize, SheetZoom, 0xFF00CCFF, sw, sh);
+            }
+
+            if (Ctrl.Viewport.HexView)
+                DrawHexOverlay();
         }
-
-        var (vx, vy) = Ctrl.Document.ViewOriginSheet;
-        var tile = Ctrl.TileSize;
-        if (Ctrl.ViewWidth > tile || Ctrl.ViewHeight > tile)
-            HighlightRegionRect(ptr, stride, vx, vy, Ctrl.ViewWidth, Ctrl.ViewHeight, SheetZoom, 0xFFFFCC00, sw, sh);
-        else
-            HighlightSpriteRect(ptr, stride, vx, vy, tile, SheetZoom, 0xFFFFCC00, sw, sh);
-
-        foreach (var idx in Ctrl.Selection.SpriteIndices)
-        {
-            var (sx, sy) = Ctrl.Document.SpriteOriginFor(idx);
-            HighlightSpriteRect(ptr, stride, sx, sy, Ctrl.TileSize, SheetZoom, 0xFF00CCFF, sw, sh);
-        }
-
-        if (Ctrl.Viewport.HexView)
-            DrawHexOverlay(ptr, stride);
 
         _sheetImage.InvalidateVisual();
     }
 
-    private static unsafe void DrawHexOverlay(nint ptr, int stride)
+    private static void DrawHexOverlay()
     {
         // Hex indices drawn as subtle tint on sprite top-left pixel
+    }
+
+    private static unsafe void ClearBitmap(nint ptr, int stride, int width, int height, uint color)
+    {
+        for (var y = 0; y < height; y++)
+        {
+            var row = ptr + y * stride;
+            for (var x = 0; x < width; x++)
+                *(uint*)(row + x * 4) = color;
+        }
     }
 
     private static unsafe void FillPixelBlock(nint ptr, int stride, int px, int py, int zoom, uint color, int maxW, int maxH)
@@ -349,6 +474,7 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
 
     private static unsafe void DrawGridOverlay(nint ptr, int stride, int size, int cellSize)
     {
+        if (cellSize <= 0) return;
         var gridColor = 0x40000000u;
         for (var i = cellSize; i < size; i += cellSize)
         {
@@ -396,58 +522,11 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         return 0xFF000000u | (uint)(r << 16) | (uint)(g << 8) | (uint)b;
     }
 
-    private Control BuildLayout()
+    private Grid BuildLayout()
     {
-        var root = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,240"),
-            Background = new SolidColorBrush(Color.Parse("#1E1E1E")),
-        };
+        _chrome = new EditorChrome();
 
-        var sheetPanel = new StackPanel { Margin = new Thickness(8), Spacing = 4 };
-        sheetPanel.Children.Add(new TextBlock { Text = "Sprite Sheet", Foreground = Brushes.LightGray, FontSize = 11 });
-        _sheetImage = new Image { Stretch = Stretch.None };
-        _sheetImage.PointerPressed += OnSheetPointerPressed;
-        _sheetImage.PointerMoved += OnSheetPointerMoved;
-        sheetPanel.Children.Add(new ScrollViewer { MaxHeight = 320, Content = _sheetImage });
-
-        var sheetOps = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-        var dupBtn = new Button { Content = "Dup", Padding = new Thickness(6, 2) };
-        ToolTip.SetTip(dupBtn, "Duplicate sprite(s)");
-        dupBtn.Click += (_, _) => Ctrl.DuplicateSprites();
-        var delBtn = new Button { Content = "Del", Padding = new Thickness(6, 2) };
-        ToolTip.SetTip(delBtn, "Delete sprite(s)");
-        delBtn.Click += (_, _) => Ctrl.DeleteSprites();
-        sheetOps.Children.Add(dupBtn);
-        sheetOps.Children.Add(delBtn);
-        sheetPanel.Children.Add(sheetOps);
-
-        var center = new StackPanel { Margin = new Thickness(8), Spacing = 8 };
-        _spriteLabel = new TextBlock { Text = Ctrl.SpriteLabel, Foreground = Brushes.LightGray, FontSize = 12 };
-        center.Children.Add(_spriteLabel);
-
-        var nav = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-        var prevBtn = new Button { Content = "◀ Q", Padding = new Thickness(8, 2) };
-        ToolTip.SetTip(prevBtn, "Prev sprite (Q)");
-        prevBtn.Click += (_, _) => Ctrl.CurrentSpriteIndex--;
-        var nextBtn = new Button { Content = "W ▶", Padding = new Thickness(8, 2) };
-        ToolTip.SetTip(nextBtn, "Next sprite (W)");
-        nextBtn.Click += (_, _) => Ctrl.CurrentSpriteIndex++;
-        nav.Children.Add(prevBtn);
-        nav.Children.Add(nextBtn);
-        center.Children.Add(nav);
-
-        if (Ctrl.UsesGfx2Bank)
-        {
-            var bankRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-            var gfxBtn = new Button { Content = "GFX (0–127)", Padding = new Thickness(8, 2) };
-            var gfx2Btn = new Button { Content = "GFX2 (128–255)", Padding = new Thickness(8, 2) };
-            gfxBtn.Click += (_, _) => Ctrl.SwitchGfxBank(0);
-            gfx2Btn.Click += (_, _) => Ctrl.SwitchGfxBank(1);
-            bankRow.Children.Add(gfxBtn);
-            bankRow.Children.Add(gfx2Btn);
-            center.Children.Add(bankRow);
-        }
+        _spriteLabel = new TextBlock { Text = Ctrl.SpriteLabel, Foreground = Brushes.LightGray, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) };
 
         _canvasImage = new Image { Stretch = Stretch.None };
         _canvasImage.PointerPressed += OnCanvasPointerPressed;
@@ -456,47 +535,53 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         _canvasImage.PointerWheelChanged += OnCanvasWheel;
         _canvasBorder = new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#3F3F46")),
-            BorderBrush = new SolidColorBrush(Color.Parse("#555555")),
+            Background = new SolidColorBrush(EditorTheme.CanvasBackground),
+            BorderBrush = new SolidColorBrush(EditorTheme.CanvasBorder),
             BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
             Child = _canvasImage,
         };
-        center.Children.Add(_canvasBorder);
-
-        _statusBar = new TextBlock { Foreground = Brushes.Gray, FontSize = 10, Text = Ctrl.StatusText };
-        center.Children.Add(_statusBar);
-
-        var sidebar = new StackPanel { Margin = new Thickness(8), Spacing = 8 };
-
-        sidebar.Children.Add(new TextBlock { Text = "Palette (L=primary, R=secondary)", Foreground = Brushes.LightGray, FontSize = 11 });
-        _palettePanel = new WrapPanel { Width = 220 };
-        sidebar.Children.Add(_palettePanel);
-
-        var swapBtn = new Button { Content = "↔ Swap (X)", Padding = new Thickness(8, 2) };
-        swapBtn.Click += (_, _) => Ctrl.Palette.Swap();
-        sidebar.Children.Add(swapBtn);
-
-        sidebar.Children.Add(new TextBlock { Text = "Sprite Flags", Foreground = Brushes.LightGray, FontSize = 11 });
-        _flagsPanel = new WrapPanel { Width = 220 };
-        for (var i = 0; i < 8; i++)
+        _canvasHost = new Border
         {
-            var bit = i;
-            var toggle = new ToggleButton { Content = $"F{bit}", Width = 44, Height = 28, Margin = new Thickness(2), FontSize = 11 };
-            toggle.IsCheckedChanged += (_, _) =>
-            {
-                if (toggle.IsChecked.HasValue)
-                    Ctrl.SetFlag(bit, toggle.IsChecked.Value);
-            };
-            _flagsPanel.Children.Add(toggle);
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            ClipToBounds = true,
+            Child = _canvasBorder,
+        };
+        _canvasHost.SizeChanged += (_, _) => UpdateCanvasPanelSize();
+        _chrome.PrimaryHost.PanelSizeChanged += (_, _) => UpdateCanvasPanelSize();
+
+        var canvasGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*") };
+        canvasGrid.Children.Add(_spriteLabel);
+        Grid.SetRow(_spriteLabel, 0);
+        var nav = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var prevBtn = new Button { Content = "◀ Q", Padding = new Thickness(8, 2) };
+        prevBtn.Click += (_, _) => Ctrl.NavigateSprite(-1);
+        var nextBtn = new Button { Content = "W ▶", Padding = new Thickness(8, 2) };
+        nextBtn.Click += (_, _) => Ctrl.NavigateSprite(1);
+        nav.Children.Add(prevBtn);
+        nav.Children.Add(nextBtn);
+        if (Ctrl.UsesGfx2Bank)
+        {
+            var gfxBtn = new Button { Content = "GFX (0–127)", Padding = new Thickness(8, 2) };
+            gfxBtn.Click += (_, _) => Ctrl.SwitchGfxBank(0);
+            var gfx2Btn = new Button { Content = "GFX2 (128–255)", Padding = new Thickness(8, 2) };
+            gfx2Btn.Click += (_, _) => Ctrl.SwitchGfxBank(1);
+            nav.Children.Add(gfxBtn);
+            nav.Children.Add(gfx2Btn);
         }
-        sidebar.Children.Add(_flagsPanel);
+        canvasGrid.Children.Add(nav);
+        Grid.SetRow(nav, 1);
+        canvasGrid.Children.Add(_canvasHost);
+        Grid.SetRow(_canvasHost, 2);
+        _chrome.PrimaryHost.Child = canvasGrid;
 
-        sidebar.Children.Add(new TextBlock { Text = "Tools", Foreground = Brushes.LightGray, FontSize = 11 });
-        _toolsPanel = new WrapPanel { Width = 220 };
-        foreach (var entry in new (string tool, string? label, Func<Control>? icon)[]
-        {
-            ("pencil", null, SpriteToolIcons.CreateBrushIcon),
-            ("eraser", null, SpriteToolIcons.CreateEraserIcon),
+        _toolStrip = _chrome.ToolStrip;
+        _toolStrip.SetTools(
+        [
+            ("pencil", null, Sprites.SpriteToolIcons.CreateBrushIcon),
+            ("eraser", null, Sprites.SpriteToolIcons.CreateEraserIcon),
             ("fill", "🪣", null),
             ("picker", "💧", null),
             ("select", "⬚", null),
@@ -505,55 +590,67 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
             ("flip-h", "↔", null),
             ("flip-v", "↕", null),
             ("rotate", "↻", null),
-        })
+        ], Ctrl.SelectedTool);
+        _toolStrip.ToolSelected += tool =>
         {
-            var tip = SpriteEditorInputMap.GetTooltip(entry.tool);
-            Control child = entry.icon != null
-                ? entry.icon()
-                : new TextBlock
-                {
-                    Text = entry.label,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    FontSize = 14,
-                };
-            var btn = new Border
+            if (tool is "flip-h" or "flip-v" or "rotate")
             {
-                Width = 36, Height = 28,
-                Background = new SolidColorBrush(Color.Parse("#333337")),
-                BorderBrush = Brushes.Transparent,
-                BorderThickness = new Thickness(1),
-                Child = child,
-                Tag = entry.tool, Margin = new Thickness(2),
-            };
-            ToolTip.SetTip(btn, tip);
-            btn.PointerPressed += (_, _) => SelectTool(entry.tool);
-            _toolsPanel.Children.Add(btn);
+                if (tool == "flip-h") Ctrl.FlipHorizontal();
+                else if (tool == "flip-v") Ctrl.FlipVertical();
+                else Ctrl.Rotate90();
+            }
+            else SelectTool(tool);
+        };
+
+        _chrome.ContextStrip.Children.Add(new TextBlock { Text = "Palette", Foreground = Brushes.LightGray, FontSize = EditorTheme.SectionLabelFontSize, VerticalAlignment = VerticalAlignment.Center });
+        _palettePanel = new WrapPanel();
+        _chrome.ContextStrip.Children.Add(_palettePanel);
+        var swapBtn = new Button { Content = "↔ X", Padding = new Thickness(6, 2) };
+        swapBtn.Click += (_, _) => Ctrl.Palette.Swap();
+        _chrome.ContextStrip.Children.Add(swapBtn);
+        _flagsPanel = new WrapPanel();
+        for (var i = 0; i < 8; i++)
+        {
+            var bit = i;
+            var toggle = new ToggleButton { Content = $"F{bit}", Width = 44, Height = 28, Margin = new Thickness(2), FontSize = 11 };
+            toggle.IsCheckedChanged += (_, _) => { if (toggle.IsChecked.HasValue) Ctrl.SetFlag(bit, toggle.IsChecked.Value); };
+            _flagsPanel.Children.Add(toggle);
         }
-        sidebar.Children.Add(_toolsPanel);
-
-        var undoRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-        var undoBtn = new Button { Content = "Undo", Padding = new Thickness(8, 2) };
-        ToolTip.SetTip(undoBtn, "Ctrl+Z");
+        _chrome.ContextStrip.Children.Add(_flagsPanel);
+        var undoBtn = new Button { Content = "Undo", Padding = new Thickness(6, 2) };
         undoBtn.Click += (_, _) => { Ctrl.HandleKey("Z", true, false, false); RefreshCanvas(); RefreshSheet(); RefreshFlagToggles(); };
-        var redoBtn = new Button { Content = "Redo", Padding = new Thickness(8, 2) };
-        ToolTip.SetTip(redoBtn, "Ctrl+Y");
+        var redoBtn = new Button { Content = "Redo", Padding = new Thickness(6, 2) };
         redoBtn.Click += (_, _) => { Ctrl.HandleKey("Y", true, false, false); RefreshCanvas(); RefreshSheet(); RefreshFlagToggles(); };
-        var clearBtn = new Button { Content = "Clear", Padding = new Thickness(8, 2) };
-        ToolTip.SetTip(clearBtn, "Ctrl+Delete");
+        var clearBtn = new Button { Content = "Clear", Padding = new Thickness(6, 2) };
         clearBtn.Click += (_, _) => Ctrl.ClearSprite();
-        undoRow.Children.Add(undoBtn);
-        undoRow.Children.Add(redoBtn);
-        undoRow.Children.Add(clearBtn);
-        sidebar.Children.Add(undoRow);
+        _chrome.ContextStrip.Children.Add(undoBtn);
+        _chrome.ContextStrip.Children.Add(redoBtn);
+        _chrome.ContextStrip.Children.Add(clearBtn);
 
-        Grid.SetColumn(sheetPanel, 0);
-        Grid.SetColumn(center, 1);
-        Grid.SetColumn(sidebar, 2);
-        root.Children.Add(sheetPanel);
-        root.Children.Add(center);
-        root.Children.Add(sidebar);
-        return root;
+        var sheetPanel = new StackPanel { Spacing = 4 };
+        sheetPanel.Children.Add(new TextBlock { Text = "Sprite Sheet", Foreground = Brushes.LightGray, FontSize = EditorTheme.SectionLabelFontSize });
+        _sheetImage = new Image { Stretch = Stretch.None };
+        _sheetImage.PointerPressed += OnSheetPointerPressed;
+        _sheetImage.PointerMoved += OnSheetPointerMoved;
+        _sheetImage.PointerReleased += OnSheetPointerReleased;
+        sheetPanel.Children.Add(new ScrollViewer { MaxHeight = 160, Content = _sheetImage, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto });
+        var sheetOps = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var dupBtn = new Button { Content = "Dup", Padding = new Thickness(6, 2) };
+        dupBtn.Click += (_, _) => Ctrl.DuplicateSprites();
+        var delBtn = new Button { Content = "Del", Padding = new Thickness(6, 2) };
+        delBtn.Click += (_, _) => Ctrl.DeleteSprites();
+        sheetOps.Children.Add(dupBtn);
+        sheetOps.Children.Add(delBtn);
+        sheetPanel.Children.Add(sheetOps);
+        _chrome.NavigatorHost.Content = sheetPanel;
+
+        _statusBar = _chrome.StatusFooter;
+        _statusBar.Text = Ctrl.StatusText;
+
+        EditorKeyboardRouting.PreventFocusSteal(_chrome);
+        _chrome.PointerPressed += (_, _) => Focus();
+
+        return _chrome;
     }
 
     private void RebuildPaletteSwatches()
@@ -626,17 +723,8 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         }
     }
 
-    private void UpdateToolHighlight()
-    {
-        foreach (var child in _toolsPanel.Children)
-        {
-            if (child is Border btn && btn.Tag is string tool)
-            {
-                var active = tool == Ctrl.SelectedTool || (tool == "shape" && Ctrl.SelectedTool == "shape");
-                btn.BorderBrush = active ? Brushes.CornflowerBlue : Brushes.Transparent;
-            }
-        }
-    }
+    private void UpdateToolHighlight() =>
+        _toolStrip.HighlightTool(Ctrl.SelectedTool == "shape" ? "shape" : Ctrl.SelectedTool);
 
     private void OnSheetPointerPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -655,48 +743,76 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         }
         Ctrl.SelectSpriteAtSheet(sx, sy, false, mods.HasFlag(KeyModifiers.Control));
         RefreshFlagToggles();
-        RefreshSheet();
-        RefreshCanvas();
     }
 
     private void OnSheetPointerMoved(object? sender, PointerEventArgs e)
     {
         if (!_sheetDragging) return;
         var pt = e.GetPosition(_sheetImage);
-        var sx = Math.Clamp((int)(pt.X / SheetZoom), 0, Ctrl.SheetWidth - 1);
-        var sy = Math.Clamp((int)(pt.Y / SheetZoom), 0, Ctrl.SheetHeight - 1);
-        Ctrl.SelectSpritesInSheetRect(_sheetDragStartX, _sheetDragStartY, sx, sy);
+        var (sx, sy) = SheetCoordsFromPointer(pt);
+        var tile = Ctrl.TileSize;
+        if (tile <= 0) return;
+        var sameCell = sx / tile == _sheetDragStartX / tile && sy / tile == _sheetDragStartY / tile;
+        if (sameCell) return;
+
+        Ctrl.SelectSpritesInSheetRect(_sheetDragStartX, _sheetDragStartY, sx, sy, updateViewRegion: false);
         RefreshFlagToggles();
-        RefreshSheet();
-        RefreshCanvas();
+        QueueVisualRefresh(rebuildCanvas: false);
     }
 
-    private void EndSheetDrag(int sx, int sy)
+    private void OnSheetPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
         if (!_sheetDragging) return;
+        var pt = e.GetPosition(_sheetImage);
+        var (sx, sy) = SheetCoordsFromPointer(pt);
+        var startX = _sheetDragStartX;
+        var startY = _sheetDragStartY;
         _sheetDragging = false;
+        e.Pointer.Capture(null);
+        e.Handled = true;
+        FinishSheetDrag(sx, sy, startX, startY);
+    }
+
+    private (int sx, int sy) SheetCoordsFromPointer(Point pt)
+    {
+        var maxX = Math.Max(0, Ctrl.SheetWidth - 1);
+        var maxY = Math.Max(0, Ctrl.SheetHeight - 1);
+        var sx = Math.Clamp((int)(pt.X / SheetZoom), 0, maxX);
+        var sy = Math.Clamp((int)(pt.Y / SheetZoom), 0, maxY);
+        return (sx, sy);
+    }
+
+    private void FinishSheetDrag(int sx, int sy, int startX, int startY)
+    {
         var tile = Ctrl.TileSize;
-        var sameCell = sx / tile == _sheetDragStartX / tile && sy / tile == _sheetDragStartY / tile;
-        if (sameCell)
+        if (tile <= 0) return;
+        var sameCell = sx / tile == startX / tile && sy / tile == startY / tile;
+        var endX = sx;
+        var endY = sy;
+
+        Dispatcher.UIThread.Post(() =>
         {
-            var index = (sy / tile) * Ctrl.SpritesPerRow + sx / tile;
-            if (index >= 0 && index < Ctrl.SpriteCount)
+            if (sameCell)
             {
-                Ctrl.Selection.AddSprite(index);
+                var index = (endY / tile) * Ctrl.SpritesPerRow + endX / tile;
+                if (index >= 0 && index < Ctrl.SpriteCount)
+                    Ctrl.AddSpriteToSelection(index);
+            }
+            else
+            {
                 Ctrl.UpdateViewRegion();
             }
-        }
-        RefreshFlagToggles();
-        RefreshSheet();
-        RefreshCanvas();
+
+            RefreshFlagToggles();
+        }, DispatcherPriority.Background);
     }
 
     private PointerInput BuildInput(int x, int y, bool isStart)
     {
         var vw = Ctrl.ViewWidth;
         var vh = Ctrl.ViewHeight;
-        x = Math.Clamp(x, 0, vw - 1);
-        y = Math.Clamp(y, 0, vh - 1);
+        x = Math.Clamp(x, 0, Math.Max(0, vw - 1));
+        y = Math.Clamp(y, 0, Math.Max(0, vh - 1));
         return new PointerInput
         {
             LocalX = x, LocalY = y, IsStart = isStart,
@@ -781,14 +897,6 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        if (_sheetDragging)
-        {
-            var pt = e.GetPosition(_sheetImage);
-            var sx = Math.Clamp((int)(pt.X / SheetZoom), 0, Ctrl.SheetWidth - 1);
-            var sy = Math.Clamp((int)(pt.Y / SheetZoom), 0, Ctrl.SheetHeight - 1);
-            EndSheetDrag(sx, sy);
-            e.Pointer.Capture(null);
-        }
         if (_isDrawing)
         {
             var pt = e.GetPosition(_canvasImage);
@@ -812,9 +920,22 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
 
         if (Ctrl.HandleKey(key, ctrl, shift, alt))
+        {
             e.Handled = true;
+            QueueVisualRefresh(rebuildCanvas: true);
+        }
 
         Ctrl.RefreshStampPreviewModifiers(ctrl);
+    }
+
+    private void OnTextInput(object? sender, TextInputEventArgs e)
+    {
+        if (string.IsNullOrEmpty(e.Text)) return;
+        if (Ctrl.HandleTextInput(e.Text))
+        {
+            e.Handled = true;
+            QueueVisualRefresh(rebuildCanvas: true);
+        }
     }
 
     private void OnKeyUp(object? sender, KeyEventArgs e)

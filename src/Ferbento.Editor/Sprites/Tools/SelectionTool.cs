@@ -44,10 +44,12 @@ public sealed class SelectionTool : ISpriteTool
         {
             var vw = ctx.Document.ViewWidth;
             var vh = ctx.Document.ViewHeight;
-            var left = Math.Clamp(Math.Min(start.x, input.LocalX), 0, vw - 1);
-            var top = Math.Clamp(Math.Min(start.y, input.LocalY), 0, vh - 1);
-            var right = Math.Clamp(Math.Max(start.x, input.LocalX), 0, vw - 1);
-            var bottom = Math.Clamp(Math.Max(start.y, input.LocalY), 0, vh - 1);
+            var maxX = Math.Max(0, vw - 1);
+            var maxY = Math.Max(0, vh - 1);
+            var left = Math.Clamp(Math.Min(start.x, input.LocalX), 0, maxX);
+            var top = Math.Clamp(Math.Min(start.y, input.LocalY), 0, maxY);
+            var right = Math.Clamp(Math.Max(start.x, input.LocalX), 0, maxX);
+            var bottom = Math.Clamp(Math.Max(start.y, input.LocalY), 0, maxY);
             var w = right - left + 1;
             var h = bottom - top + 1;
             var buf = ctx.Document.ReadLocalRegion(left, top, w, h);

@@ -9,10 +9,12 @@ public sealed class SpriteChip : IChip
     public string Name => "Sprite";
 
     private ChipBus _bus = null!;
+    private HardwareProfile _profile = HardwareProfile.Pico8();
     private int _sheetWidth = 128;
     private int _sheetHeight = 128;
     private int _tileSize = 8;
     private bool _usesGfx2Bank;
+    private int _gfx2Start = MemoryMap.Gfx2Start;
 
     public int SheetWidth => _sheetWidth;
     public int SheetHeight => _sheetHeight;
@@ -23,11 +25,12 @@ public sealed class SpriteChip : IChip
 
     public void Configure(HardwareProfile profile)
     {
+        _profile = profile;
         _sheetWidth = profile.Sprites.SheetWidth;
         _sheetHeight = profile.Sprites.SheetHeight;
         _tileSize = profile.Sprites.TileSize;
-        _usesGfx2Bank = profile.Name.Equals("Pico-8", StringComparison.OrdinalIgnoreCase)
-            && _sheetHeight > 64;
+        _usesGfx2Bank = ChipMemoryLayout.UsesGfx2Bank(profile);
+        _gfx2Start = ChipMemoryLayout.GfxSecondaryStart(profile);
     }
 
     public void Initialize(ChipBus bus) => _bus = bus;
@@ -85,7 +88,7 @@ public sealed class SpriteChip : IChip
         if (_usesGfx2Bank && y >= halfHeight)
         {
             var localY = y - halfHeight;
-            return MemoryMap.Gfx2Start + (localY * _sheetWidth + x) / 2;
+            return _gfx2Start + (localY * _sheetWidth + x) / 2;
         }
 
         return MemoryMap.GfxStart + (y * _sheetWidth + x) / 2;

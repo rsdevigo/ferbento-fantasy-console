@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Ferbento.Core.Chips;
+using Ferbento.Editor.Chrome;
 using Ferbento.Editor.Sprites.Animation;
 using Ferbento.Editor.Sprites.Input;
 using Ferbento.Editor.Sprites.Tools;
@@ -11,6 +12,8 @@ namespace Ferbento.Editor.Sprites;
 
 public sealed class SpriteEditorController : INotifyPropertyChanged
 {
+    private const int MaxMultiSpriteTiles = 4;
+
     public SpriteDocument Document { get; } = new();
     public PaletteState Palette { get; } = new();
     public Selection Selection { get; } = new();
@@ -26,6 +29,9 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
     private readonly SpriteEditorContext _ctx;
     private string _selectedTool = "pencil";
     private bool _spaceHeld;
+    private double _canvasPanelWidth;
+    private double _canvasPanelHeight;
+    private bool _canvasPanelSizeKnown;
 
     public event Action? Edited;
     public event Action? RefreshRequested;
@@ -174,21 +180,13 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
 
     public void UpdateViewRegion()
     {
-        if (Selection.HasSpriteSelection && Selection.SpriteIndices.Count > 0)
+        if (Selection.HasSpriteSelection && TryGetSelectionTileRect(out var col0, out var row0, out var col1, out var row1))
         {
-            var minX = int.MaxValue;
-            var minY = int.MaxValue;
-            var maxX = 0;
-            var maxY = 0;
-            foreach (var idx in Selection.SpriteIndices)
-            {
-                var (ox, oy) = Document.SpriteOriginFor(idx);
-                minX = Math.Min(minX, ox);
-                minY = Math.Min(minY, oy);
-                maxX = Math.Max(maxX, ox + TileSize);
-                maxY = Math.Max(maxY, oy + TileSize);
-            }
-            Document.SetViewRegion(minX, minY, maxX - minX, maxY - minY);
+            ClampTileRectToMax(ref col0, ref row0, ref col1, ref row1);
+            var tile = TileSize;
+            Document.SetViewRegion(
+                col0 * tile, row0 * tile,
+                (col1 - col0 + 1) * tile, (row1 - row0 + 1) * tile);
         }
         else
             Document.ResetViewToCurrentSprite();
@@ -196,7 +194,141 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
         OnPropertyChanged(nameof(ViewWidth));
         OnPropertyChanged(nameof(ViewHeight));
         OnPropertyChanged(nameof(StatusText));
+        ApplyFitZoom(resetZoom: true);
+    }
+
+    public void SetCanvasPanelSize(double width, double height)
+    {
+        if (width <= 0 || height <= 0) return;
+        _canvasPanelWidth = width;
+        _canvasPanelHeight = height;
+        ApplyFitZoom(resetZoom: !_canvasPanelSizeKnown);
+        _canvasPanelSizeKnown = true;
+    }
+
+    public int ComputeFitZoom()
+    {
+        var vw = Math.Max(1, ViewWidth);
+        var vh = Math.Max(1, ViewHeight);
+        if (_canvasPanelWidth <= 0 || _canvasPanelHeight <= 0)
+            return Viewport.Zoom;
+
+        var fitW = (int)(_canvasPanelWidth / vw);
+        var fitH = (int)(_canvasPanelHeight / vh);
+        return Math.Clamp(Math.Min(fitW, fitH), 1, 64);
+    }
+
+    private void ApplyFitZoom(bool resetZoom)
+    {
+        var fit = ComputeFitZoom();
+        Viewport.MaxZoom = fit;
+        Viewport.Zoom = resetZoom ? fit : Math.Min(Viewport.Zoom, fit);
+    }
+
+    public void NavigateSprite(int delta)
+    {
+        var index = Selection.HasSpriteSelection ? GetSelectionAnchorIndex() : CurrentSpriteIndex;
+        index = Math.Clamp(index + delta, 0, Math.Max(0, SpriteCount - 1));
+        Selection.Clear();
+        CurrentSpriteIndex = index;
+    }
+
+    private int GetSelectionAnchorIndex()
+    {
+        if (!TryGetSelectionTileRect(out var col0, out var row0, out var col1, out var row1))
+            return CurrentSpriteIndex;
+        return row1 * SpritesPerRow + col1;
+    }
+
+    public void AddSpriteToSelection(int index)
+    {
+        if (index < 0 || index >= SpriteCount) return;
+
+        var clickCol = index % SpritesPerRow;
+        var clickRow = index / SpritesPerRow;
+
+        int col0;
+        int row0;
+        int col1;
+        int row1;
+        if (Selection.HasSpriteSelection && TryGetSelectionTileRect(out col0, out row0, out col1, out row1))
+        {
+            if (!IsTileAdjacentToRect(clickCol, clickRow, col0, row0, col1, row1))
+                return;
+        }
+        else
+        {
+            var (ox, oy) = Document.SpriteOrigin;
+            col0 = col1 = ox / TileSize;
+            row0 = row1 = oy / TileSize;
+            if (!IsTileAdjacentToRect(clickCol, clickRow, col0, row0, col1, row1))
+                return;
+        }
+
+        col0 = Math.Min(col0, clickCol);
+        col1 = Math.Max(col1, clickCol);
+        row0 = Math.Min(row0, clickRow);
+        row1 = Math.Max(row1, clickRow);
+        if (WouldExceedMaxTiles(col0, row0, col1, row1))
+            return;
+
+        SetSelectionTileRect(col0, row0, col1, row1);
+        UpdateViewRegion();
         RequestRefresh();
+    }
+
+    private bool TryGetSelectionTileRect(out int col0, out int row0, out int col1, out int row1)
+    {
+        col0 = int.MaxValue;
+        row0 = int.MaxValue;
+        col1 = 0;
+        row1 = 0;
+        if (!Selection.HasSpriteSelection || Selection.SpriteIndices.Count == 0)
+            return false;
+
+        foreach (var idx in Selection.SpriteIndices)
+        {
+            var col = idx % SpritesPerRow;
+            var row = idx / SpritesPerRow;
+            col0 = Math.Min(col0, col);
+            row0 = Math.Min(row0, row);
+            col1 = Math.Max(col1, col);
+            row1 = Math.Max(row1, row);
+        }
+        return true;
+    }
+
+    private static bool IsTileAdjacentToRect(int col, int row, int col0, int row0, int col1, int row1)
+    {
+        if (col >= col0 && col <= col1 && row >= row0 && row <= row1) return true;
+        if (col < col0 - 1 || col > col1 + 1 || row < row0 - 1 || row > row1 + 1) return false;
+        return true;
+    }
+
+    private static void ClampTileRectToMax(ref int col0, ref int row0, ref int col1, ref int row1)
+    {
+        if (col1 - col0 + 1 > MaxMultiSpriteTiles)
+            col1 = col0 + MaxMultiSpriteTiles - 1;
+        if (row1 - row0 + 1 > MaxMultiSpriteTiles)
+            row1 = row0 + MaxMultiSpriteTiles - 1;
+    }
+
+    private static bool WouldExceedMaxTiles(int col0, int row0, int col1, int row1) =>
+        col1 - col0 + 1 > MaxMultiSpriteTiles || row1 - row0 + 1 > MaxMultiSpriteTiles;
+
+    private void SetSelectionTileRect(int col0, int row0, int col1, int row1)
+    {
+        var indices = new List<int>();
+        for (var row = row0; row <= row1; row++)
+        for (var col = col0; col <= col1; col++)
+        {
+            var index = row * SpritesPerRow + col;
+            if (index >= 0 && index < SpriteCount)
+                indices.Add(index);
+        }
+        if (indices.Count == 0) return;
+        Selection.SetSprites(indices);
+        CurrentSpriteIndex = indices[0];
     }
 
     public void AdjustBrushSize(int delta)
@@ -210,25 +342,21 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
         OnPropertyChanged(nameof(StatusText));
     }
 
-    public void SelectSpritesInSheetRect(int sheetX0, int sheetY0, int sheetX1, int sheetY1)
+    public void SelectSpritesInSheetRect(int sheetX0, int sheetY0, int sheetX1, int sheetY1, bool updateViewRegion = true)
     {
         var tile = TileSize;
+        if (tile <= 0) return;
         var col0 = Math.Min(sheetX0, sheetX1) / tile;
         var col1 = Math.Max(sheetX0, sheetX1) / tile;
         var row0 = Math.Min(sheetY0, sheetY1) / tile;
         var row1 = Math.Max(sheetY0, sheetY1) / tile;
-        var indices = new List<int>();
-        for (var row = row0; row <= row1; row++)
-        for (var col = col0; col <= col1; col++)
-        {
-            var index = row * SpritesPerRow + col;
-            if (index >= 0 && index < SpriteCount)
-                indices.Add(index);
-        }
-        if (indices.Count == 0) return;
-        Selection.SetSprites(indices);
-        CurrentSpriteIndex = indices[0];
-        UpdateViewRegion();
+        ClampTileRectToMax(ref col0, ref row0, ref col1, ref row1);
+
+        SetSelectionTileRect(col0, row0, col1, row1);
+        if (updateViewRegion)
+            UpdateViewRegion();
+        else
+            RequestRefresh();
     }
 
     public void SetProfile(HardwareProfile profile)
@@ -280,6 +408,8 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
     }
 
     public void RequestRefresh() => RefreshRequested?.Invoke();
+
+    public void NotifyEdited() => Edited?.Invoke();
 
     public void Undo()
     {
@@ -380,6 +510,24 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
         return ExecuteAction(action.Value, shift);
     }
 
+    public bool HandleTextInput(string text)
+    {
+        if (EditorTextShortcuts.TryZoom(
+                text,
+                () => ExecuteAction(SpriteEditorAction.ZoomIn, shift: false),
+                () => ExecuteAction(SpriteEditorAction.ZoomOut, shift: false)))
+            return true;
+
+        if (SelectedTool is "pencil" or "eraser" &&
+            EditorTextShortcuts.TryBrushSize(
+                text,
+                () => ExecuteAction(SpriteEditorAction.BrushSmaller, shift: false),
+                () => ExecuteAction(SpriteEditorAction.BrushLarger, shift: false)))
+            return true;
+
+        return false;
+    }
+
     public void HandleKeyUp(string key)
     {
         if (key == "Space") _spaceHeld = false;
@@ -402,8 +550,10 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
         if (key == "W") return SpriteEditorAction.NextSprite;
         if (key == "1") return SpriteEditorAction.PrevColor;
         if (key == "2") return SpriteEditorAction.NextColor;
-        if (key == "Oemplus" || key == "Add") return SpriteEditorAction.ZoomIn;
-        if (key == "OemMinus" || key == "Subtract") return SpriteEditorAction.ZoomOut;
+        if (MapBrushSizeKey(key, ctrl, alt, smaller: true)) return SpriteEditorAction.BrushSmaller;
+        if (MapBrushSizeKey(key, ctrl, alt, smaller: false)) return SpriteEditorAction.BrushLarger;
+        if (key is "OemPlus" or "Add") return SpriteEditorAction.ZoomIn;
+        if (key is "OemMinus" or "Subtract") return SpriteEditorAction.ZoomOut;
         if (key == "Tab") return SpriteEditorAction.ToggleFullscreen;
         if (key == "S" && !ctrl) return SpriteEditorAction.SelectTool;
         if (key == "F") return SpriteEditorAction.FlipH;
@@ -418,14 +568,21 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
         if (key == "I") return SpriteEditorAction.ToolPicker;
         if (key == "T") return SpriteEditorAction.ToolStamp;
         if (key == "L") return SpriteEditorAction.ToolShape;
-        if (key is "OemOpenBrackets" or "Subtract" && !ctrl) return SpriteEditorAction.BrushSmaller;
-        if (key is "OemCloseBrackets" or "Add" && !ctrl) return SpriteEditorAction.BrushLarger;
         if (key == "Left") return shift ? SpriteEditorAction.ShiftLeft : SpriteEditorAction.MoveLeft;
         if (key == "Right") return shift ? SpriteEditorAction.ShiftRight : SpriteEditorAction.MoveRight;
         if (key == "Up") return shift ? SpriteEditorAction.ShiftUp : SpriteEditorAction.MoveUp;
         if (key == "Down") return shift ? SpriteEditorAction.ShiftDown : SpriteEditorAction.MoveDown;
-        if (key == "LeftShift" || key == "RightShift") return SpriteEditorAction.SelectTool;
         return null;
+    }
+
+    private static bool MapBrushSizeKey(string key, bool ctrl, bool alt, bool smaller)
+    {
+        // AltGr on ABNT2 sets Ctrl+Alt; allow bracket keys unless only Ctrl is held.
+        if (ctrl && !alt) return false;
+
+        return smaller
+            ? key is "OemOpenBrackets" or "OemQuotes" or "Apostrophe"
+            : key is "OemCloseBrackets" or "OemQuestion" or "Quote";
     }
 
     private bool ExecuteAction(SpriteEditorAction action, bool shift)
@@ -441,8 +598,8 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
             case SpriteEditorAction.Copy: Copy(); return true;
             case SpriteEditorAction.Cut: Cut(); return true;
             case SpriteEditorAction.Paste: Paste(); return true;
-            case SpriteEditorAction.PrevSprite: CurrentSpriteIndex--; return true;
-            case SpriteEditorAction.NextSprite: CurrentSpriteIndex++; return true;
+            case SpriteEditorAction.PrevSprite: NavigateSprite(-1); return true;
+            case SpriteEditorAction.NextSprite: NavigateSprite(1); return true;
             case SpriteEditorAction.PrevColor:
                 if (shift) Palette.PrevColor(secondary: true); else Palette.PrevColor();
                 return true;
@@ -469,7 +626,7 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
             case SpriteEditorAction.ClearSelection:
                 Selection.Clear();
                 GetActiveTool()?.OnCancel(_ctx);
-                RequestRefresh();
+                UpdateViewRegion();
                 return true;
             case SpriteEditorAction.ClearArea: ClearSelectionArea(); return true;
             case SpriteEditorAction.SwapColors: Palette.Swap(); return true;
@@ -684,8 +841,6 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
 
     public void ClearSpriteAt(int spriteIndex)
     {
-        var before = Document.GetSpritePixels(spriteIndex);
-        var beforeFlags = Document.GetFlags(spriteIndex);
         var clear = new byte[TileSize * TileSize];
         _ctx.ApplySpritePatch("clear", spriteIndex, clear, 0);
         RequestRefresh();
@@ -749,8 +904,8 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
 
         if (shift)
         {
-            Selection.AddSprite(index);
-            UpdateViewRegion();
+            AddSpriteToSelection(index);
+            return;
         }
         else
         {

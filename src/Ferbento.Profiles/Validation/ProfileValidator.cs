@@ -130,6 +130,18 @@ public sealed class ProfileValidator
             AddError(r, "Memory.Ram must be between 256 and 16777216");
         if (p.Memory.CartRom < 0 || p.Memory.CartRom > 16_777_216)
             AddError(r, "Memory.CartRom must be between 0 and 16777216");
+
+        var layout = p.Memory.MapLayout;
+        if (layout is null) return;
+
+        if (layout.MapPrimaryRows <= 0)
+            AddError(r, "Memory.MapLayout.MapPrimaryRows must be positive when MapLayout is set");
+        if (layout.MapDataStart < 0 || layout.MapDataStart >= p.Memory.Ram)
+            AddError(r, "Memory.MapLayout.MapDataStart must be within RAM");
+        if (layout.SharedRegionStart < 0 || layout.SharedRegionStart >= p.Memory.Ram)
+            AddError(r, "Memory.MapLayout.SharedRegionStart must be within RAM");
+        if (layout.MapPrimaryRows > p.Map.Height)
+            AddError(r, "Memory.MapLayout.MapPrimaryRows cannot exceed Map.Height");
     }
 
     private static void ValidateAudio(HardwareProfile p, ProfileValidationResult r)

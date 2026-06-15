@@ -1,454 +1,538 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Ferbento.Core.Chips;
-using Ferbento.Editor.ViewModels;
+using Ferbento.Editor.Chrome;
+using Ferbento.Editor.Sprites;
+using Ferbento.Editor.Tilemaps;
+using Ferbento.Editor.Tilemaps.CrossTab;
+using Ferbento.Editor.Tilemaps.Input;
 using Ferbento.Profiles.Models;
 
 namespace Ferbento.Editor.Views;
 
 public class TilemapEditorView : UserControl, IProfileAwareEditor
 {
-    private readonly TilemapEditorViewModel _vm = new();
+    private readonly TilemapEditorController _ctrl = new();
+    private readonly EditorChrome _chrome = new();
+    private readonly SpriteNavigatorView _navigator = new();
+    private readonly MapAssistedMoveService _moveService = new();
     private WriteableBitmap? _mapBitmap;
-    private WriteableBitmap? _tilePickerBitmap;
     private Image _mapImage = null!;
-    private Image _tilePickerImage = null!;
-    private TextBlock _tileLabel = null!;
     private ChipBus? _bus;
     private Action? _onEdited;
-    private readonly List<Button> _layerButtons = [];
+    private SpriteEditorController? _spriteCtrl;
+    private bool _isPainting;
+    private bool _panDragging;
+    private int _panLastX;
+    private int _panLastY;
+    private KeyModifiers _keyModifiers;
+
+    public TilemapEditorController Controller => _ctrl;
 
     public void SetEditedHandler(Action handler) => _onEdited = handler;
 
-    private void NotifyEdited() => _onEdited?.Invoke();
-
-    private const int MapZoom = 2;
-    private const int PickerZoom = 3;
-
-    private bool _isPainting;
-    private bool _strokeUndoPushed;
-    private (int x, int y)? _rectStart;
-    private (int x, int y, int w, int h)? _selection;
-    private int _lastUndoX;
-    private int _lastUndoY;
-    private int _lastUndoW;
-    private int _lastUndoH;
+    public void SetSpriteController(SpriteEditorController spriteCtrl) => _spriteCtrl = spriteCtrl;
 
     public TilemapEditorView()
     {
-        DataContext = _vm;
-        Content = BuildLayout();
-        Loaded += (_, _) => InitializeBitmaps();
+        BuildChrome();
+        Content = _chrome;
+        Focusable = true;
 
-        _vm.PropertyChanged += (_, e) =>
+        _ctrl.Edited += () => _onEdited?.Invoke();
+        _ctrl.RefreshRequested += RefreshAll;
+
+        _ctrl.Viewport.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName is nameof(TilemapEditorViewModel.CurrentLayer)
-                or nameof(TilemapEditorViewModel.SelectedTile))
+            if (e.PropertyName is nameof(ViewportState.Zoom) or nameof(ViewportState.HexView))
+                RebuildMapBitmap();
+        };
+
+        _ctrl.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(TilemapEditorController.MapWidth)
+                or nameof(TilemapEditorController.MapHeight)
+                or nameof(TilemapEditorController.TileSize)
+                or nameof(TilemapEditorController.SelectedTool)
+                or nameof(TilemapEditorController.SelectedTile)
+                or nameof(TilemapEditorController.CurrentLayer)
+                or nameof(TilemapEditorController.SpriteBankCount)
+                or nameof(TilemapEditorController.StatusText))
             {
-                UpdateTileLabel();
-                HighlightSelectedTile();
-                if (e.PropertyName == nameof(TilemapEditorViewModel.CurrentLayer))
-                {
-                    UpdateLayerButtons();
-                    RefreshMap();
-                }
+                UpdateUi();
             }
-            else if (e.PropertyName is nameof(TilemapEditorViewModel.MapWidth)
-                or nameof(TilemapEditorViewModel.MapHeight)
-                or nameof(TilemapEditorViewModel.TileSize)
-                or nameof(TilemapEditorViewModel.SheetWidth)
-                or nameof(TilemapEditorViewModel.SheetHeight))
-            {
-                InitializeBitmaps();
-            }
+        };
+
+        EditorKeyboardRouting.Attach(this, OnKeyDown, OnKeyUp, OnTextInput);
+        Loaded += (_, _) =>
+        {
+            RebuildMapBitmap();
+            RefreshNavigator();
+            Focus();
         };
     }
 
-    public void SetProfile(HardwareProfile profile) => _vm.SetProfile(profile);
+    private void BuildChrome()
+    {
+        _mapImage = new Image
+        {
+            Stretch = Stretch.None,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+        };
+        _mapImage.PointerPressed += OnMapPressed;
+        _mapImage.PointerMoved += OnMapMoved;
+        _mapImage.PointerReleased += OnMapReleased;
+        _mapImage.PointerWheelChanged += OnMapWheel;
+        _mapImage.PointerExited += (_, _) => _ctrl.ClearHoverTile();
+
+        _chrome.PrimaryHost.Child = _mapImage;
+        _chrome.PrimaryHost.PanelSizeChanged += (w, h) => _ctrl.SetPanelSize(w, h);
+
+        _chrome.ToolStrip.SetTools(
+        [
+            ("pencil", null, Sprites.SpriteToolIcons.CreateBrushIcon),
+            ("fill", "🪣", null),
+            ("select", "⬚", null),
+            ("stamp", "📌", null),
+            ("pan", "✋", null),
+            ("shape", "◇", null),
+        ], _ctrl.SelectedTool);
+        _chrome.ToolStrip.ToolSelected += id => _ctrl.SelectedTool = id;
+
+        BuildContextStrip();
+        _navigator.Configure(8, 4);
+        _navigator.SetCallbacks(OnNavigatorTile, OnNavigatorDrag);
+        _navigator.BankChanged += bank => _ctrl.SpriteBank = bank;
+        _chrome.NavigatorHost.Content = _navigator;
+
+        EditorKeyboardRouting.PreventFocusSteal(_chrome);
+        _chrome.PointerPressed += (_, _) => Focus();
+    }
+
+    private void BuildContextStrip()
+    {
+        _chrome.ContextStrip.Children.Clear();
+        for (var layer = 0; layer < 8; layer++)
+        {
+            var l = layer;
+            var btn = new Button { Content = $"L{layer}", FontSize = 11, Padding = new Thickness(6, 2), Tag = l };
+            btn.Click += (_, _) => _ctrl.CurrentLayer = l;
+            _chrome.ContextStrip.Children.Add(btn);
+        }
+
+        var undoBtn = new Button { Content = "Undo", FontSize = 11, Padding = new Thickness(6, 2) };
+        undoBtn.Click += (_, _) => _ctrl.HandleKey("Z", true, false, false);
+        var redoBtn = new Button { Content = "Redo", FontSize = 11, Padding = new Thickness(6, 2) };
+        redoBtn.Click += (_, _) => _ctrl.HandleKey("Y", true, false, false);
+        _chrome.ContextStrip.Children.Add(undoBtn);
+        _chrome.ContextStrip.Children.Add(redoBtn);
+    }
+
+    public void SetProfile(HardwareProfile profile)
+    {
+        _ctrl.SetProfile(profile);
+        _navigator.Configure(_ctrl.TileSize, _ctrl.SpriteBankCount);
+    }
 
     public void SetChipBus(ChipBus bus)
     {
         _bus = bus;
-        _vm.SetChipBus(bus);
-        _vm.Edited += NotifyEdited;
-        InitializeBitmaps();
-        RefreshMap();
-        RefreshTilePicker();
+        _ctrl.SetChipBus(bus);
+        RebuildMapBitmap();
+        RefreshNavigator();
     }
 
-    public void RefreshPalette()
-    {
-        RefreshMap();
-        RefreshTilePicker();
-    }
+    public void RefreshPalette() => RefreshAll();
 
     public void RefreshFromBus()
     {
-        InitializeBitmaps();
-        RefreshMap();
-        RefreshTilePicker();
+        RebuildMapBitmap();
+        RefreshNavigator();
     }
 
-    private void InitializeBitmaps()
+    private void UpdateUi()
+    {
+        _chrome.ToolStrip.HighlightTool(_ctrl.SelectedTool);
+        _chrome.StatusFooter.Text = _ctrl.StatusText;
+        RefreshNavigator();
+        RebuildMapBitmap();
+    }
+
+    private void RefreshAll() => UpdateUi();
+
+    private MapEditorViewport CurrentViewport()
+    {
+        var tile = _ctrl.TileSize;
+        var zoom = _ctrl.Viewport.Zoom;
+        return MapEditorViewport.Compute(
+            _ctrl.MapWidth, _ctrl.MapHeight, tile, zoom,
+            _ctrl.Viewport.PanX, _ctrl.Viewport.PanY,
+            _chrome.PrimaryHost.Bounds.Width, _chrome.PrimaryHost.Bounds.Height);
+    }
+
+    private void RebuildMapBitmap()
     {
         if (_bus == null) return;
+        var tile = _ctrl.TileSize;
+        var zoom = _ctrl.Viewport.Zoom;
+        var vp = CurrentViewport();
 
-        var tile = _vm.TileSize;
-        var w = _vm.MapWidth * tile * MapZoom;
-        var h = _vm.MapHeight * tile * MapZoom;
+        if (vp.BitmapWidth <= 0 || vp.BitmapHeight <= 0) return;
+
+        _mapBitmap?.Dispose();
         _mapBitmap = new WriteableBitmap(
-            new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
-        _tilePickerBitmap = new WriteableBitmap(
-            new PixelSize(_vm.SheetWidth * PickerZoom, _vm.SheetHeight * PickerZoom),
+            new PixelSize(vp.BitmapWidth, vp.BitmapHeight),
             new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
 
-        _mapImage.Source = _mapBitmap;
-        _tilePickerImage.Source = _tilePickerBitmap;
-        RefreshMap();
-        RefreshTilePicker();
-    }
-
-    private void RefreshMap()
-    {
-        if (_mapBitmap == null || _bus == null) return;
-        var tile = _vm.TileSize;
-
         using var locked = _mapBitmap.Lock();
-        var stride = locked.RowBytes;
-        var ptr = locked.Address;
+        ClearBitmap(locked.Address, locked.RowBytes, vp.BitmapWidth, vp.BitmapHeight, 0xFF3F3F46);
 
-        for (var ty = 0; ty < _vm.MapHeight; ty++)
-        for (var tx = 0; tx < _vm.MapWidth; tx++)
+        for (var vty = 0; vty < vp.TilesHigh; vty++)
+        for (var vtx = 0; vtx < vp.TilesWide; vtx++)
         {
-            var tileId = _bus.Tilemap.MGet(tx, ty);
-            if (_bus.Sprite.FGet(tileId, _vm.CurrentLayer) == 0)
-            {
-                FillTileBackground(ptr, stride, tx, ty, tile);
-                continue;
-            }
-
-            var col = tileId % _vm.SpritesPerRow;
-            var row = tileId / _vm.SpritesPerRow;
-            var spriteX = col * tile;
-            var spriteY = row * tile;
-
-            for (var py = 0; py < tile; py++)
-            for (var px = 0; px < tile; px++)
-            {
-                var colorIndex = _bus.Sprite.SGet(spriteX + px, spriteY + py);
-                var color = Pico8Colors.ToBgra(colorIndex, _vm.ColorChip);
-                var mapPx = tx * tile + px;
-                var mapPy = ty * tile + py;
-                FillPixelBlock(ptr, stride, mapPx, mapPy, MapZoom, color);
-            }
+            var mapX = vp.StartMapX + vtx;
+            var mapY = vp.StartMapY + vty;
+            if (mapX >= _ctrl.MapWidth || mapY >= _ctrl.MapHeight) continue;
+            DrawMapTile(locked.Address, locked.RowBytes, vp, mapX, mapY, tile, zoom);
         }
 
-        if (_selection is { } sel)
-            DrawSelectionRect(ptr, stride, sel.x, sel.y, sel.w, sel.h);
+        if (_ctrl.Selection.MapRect is { } sel)
+            DrawSelection(locked.Address, locked.RowBytes, sel, vp);
 
-        _mapImage.InvalidateVisual();
+        if (_ctrl.HasHoverTile && _ctrl.SelectedTool is "pencil" or "fill" or "stamp")
+            DrawPaintPreview(locked.Address, locked.RowBytes, _ctrl.HoverMapX, _ctrl.HoverMapY, vp, tile, zoom);
+
+        _mapImage.Source = _mapBitmap;
+        _mapImage.Width = vp.BitmapWidth;
+        _mapImage.Height = vp.BitmapHeight;
     }
 
-    private void RefreshTilePicker()
+    private void DrawPaintPreview(nint ptr, int stride, int mapX, int mapY, MapEditorViewport vp, int tile, int zoom)
     {
-        if (_tilePickerBitmap == null || _bus == null) return;
+        if (mapX < 0 || mapY < 0 || mapX >= _ctrl.MapWidth || mapY >= _ctrl.MapHeight) return;
+        if (!vp.IsOnBitmap(mapX, mapY)) return;
 
-        using var locked = _tilePickerBitmap.Lock();
-        var stride = locked.RowBytes;
-        var ptr = locked.Address;
+        var (tileScreenX, tileScreenY) = TileScreenOrigin(vp, mapX, mapY);
+        DrawTileOutlineScreen(ptr, stride, tileScreenX, tileScreenY, tile, zoom, 0xFFFFFF00u);
 
-        for (var y = 0; y < _vm.SheetHeight; y++)
-        for (var x = 0; x < _vm.SheetWidth; x++)
+        if (_bus == null) return;
+        var tileId = _ctrl.SelectedTile;
+        var col = tileId % _ctrl.SpritesPerRow;
+        var row = tileId / _ctrl.SpritesPerRow;
+        var sx = col * tile;
+        var sy = row * tile;
+        var transparent = _ctrl.ColorChip?.TransparentIndex ?? 0;
+
+        for (var py = 0; py < tile; py++)
+        for (var px = 0; px < tile; px++)
         {
-            var color = Pico8Colors.ToBgra(_bus.Sprite.SGet(x, y), _vm.ColorChip);
-            FillPixelBlock(ptr, stride, x, y, PickerZoom, color);
+            var ci = _bus.Sprite.SGet(sx + px, sy + py);
+            if (ci == transparent) continue;
+            var bgra = Pico8Colors.ToBgra(ci, _ctrl.ColorChip, MapTileRenderColors.Checkerboard(mapX, mapY));
+            var ghost = (bgra & 0x00FFFFFFu) | 0x88000000u;
+            BlendBlockScreen(ptr, stride, tileScreenX + px * zoom, tileScreenY + py * zoom, zoom, ghost);
         }
-
-        HighlightSelectedTileInPicker(ptr, stride);
-        _tilePickerImage.InvalidateVisual();
     }
 
-    private void HighlightSelectedTileInPicker(nint ptr, int stride)
+    private static (int x, int y) TileScreenOrigin(MapEditorViewport vp, int mapX, int mapY)
     {
-        var tile = _vm.TileSize;
-        var tileId = _vm.SelectedTile;
-        var ox = (tileId % _vm.SpritesPerRow) * tile;
-        var oy = (tileId / _vm.SpritesPerRow) * tile;
-        var highlight = 0xFFFFCC00;
-        for (var edge = 0; edge < tile; edge++)
-        for (var t = 0; t < tile; t++)
+        var x = (mapX - vp.StartMapX) * vp.CellPixels - vp.SubPixelOffsetX;
+        var y = (mapY - vp.StartMapY) * vp.CellPixels - vp.SubPixelOffsetY;
+        return (x, y);
+    }
+
+    private static unsafe void DrawTileOutlineScreen(nint ptr, int stride, int x, int y, int tile, int zoom, uint color)
+    {
+        var w = tile * zoom;
+        var h = tile * zoom;
+        for (var dx = 0; dx < w; dx++)
         {
-            FillPixelBlock(ptr, stride, ox + t, oy + edge, PickerZoom, highlight);
-            FillPixelBlock(ptr, stride, ox + edge, oy + t, PickerZoom, highlight);
+            PutPixel(ptr, stride, x + dx, y, color);
+            PutPixel(ptr, stride, x + dx, y + h - 1, color);
+        }
+        for (var dy = 0; dy < h; dy++)
+        {
+            PutPixel(ptr, stride, x, y + dy, color);
+            PutPixel(ptr, stride, x + w - 1, y + dy, color);
         }
     }
 
-    private void HighlightSelectedTile() => RefreshTilePicker();
+    private static unsafe void PutPixel(nint ptr, int stride, int x, int y, uint color)
+    {
+        if (x < 0 || y < 0) return;
+        *(uint*)(ptr + y * stride + x * 4) = color;
+    }
 
-    private static unsafe void FillPixelBlock(nint ptr, int stride, int px, int py, int zoom, uint color)
+    private static unsafe void BlendBlockScreen(nint ptr, int stride, int x, int y, int zoom, uint fg)
     {
         for (var zy = 0; zy < zoom; zy++)
         for (var zx = 0; zx < zoom; zx++)
         {
-            var offset = ((py * zoom + zy) * stride) + ((px * zoom + zx) * 4);
-            *(uint*)(ptr + offset) = color;
+            var px = x + zx;
+            var py = y + zy;
+            if (px < 0 || py < 0) continue;
+            var offset = py * stride + px * 4;
+            var bg = *(uint*)(ptr + offset);
+            *(uint*)(ptr + offset) = Blend(bg, fg);
         }
     }
 
-    private static unsafe void FillTileBackground(nint ptr, int stride, int tx, int ty, int tileSize)
+    private static uint Blend(uint bg, uint fg)
     {
-        var bg = 0xFF1A1A1A;
-        for (var py = 0; py < tileSize; py++)
-        for (var px = 0; px < tileSize; px++)
+        var fa = (fg >> 24) & 0xFF;
+        if (fa == 0) return bg;
+        var fr = (fg >> 16) & 0xFF;
+        var fgG = (fg >> 8) & 0xFF;
+        var fb = fg & 0xFF;
+        var br = (bg >> 16) & 0xFF;
+        var bgG = (bg >> 8) & 0xFF;
+        var bb = bg & 0xFF;
+        var inv = 255 - fa;
+        var r = (fr * fa + br * inv) / 255;
+        var g = (fgG * fa + bgG * inv) / 255;
+        var b = (fb * fa + bb * inv) / 255;
+        return 0xFF000000u | (uint)(r << 16) | (uint)(g << 8) | (uint)b;
+    }
+
+    private void DrawMapTile(nint ptr, int stride, MapEditorViewport vp, int mapX, int mapY, int tile, int zoom)
+    {
+        var (tileScreenX, tileScreenY) = TileScreenOrigin(vp, mapX, mapY);
+        var tileId = _bus!.Tilemap.MGet(mapX, mapY);
+        if (_bus.Sprite.FGet(tileId, _ctrl.CurrentLayer) == 0)
         {
-            var checker = ((tx + px) + (ty + py)) % 2 == 0 ? bg : 0xFF222222;
-            FillPixelBlock(ptr, stride, tx * tileSize + px, ty * tileSize + py, MapZoom, checker);
+            var bg = MapTileRenderColors.Checkerboard(mapX, mapY);
+            FillBlockScreen(ptr, stride, tileScreenX, tileScreenY, zoom, tile, bg);
+            if (_ctrl.Viewport.HexView)
+                DrawHexDigit(ptr, stride, tileScreenX, tileScreenY, tileId);
+            return;
+        }
+
+        var col = tileId % _ctrl.SpritesPerRow;
+        var row = tileId / _ctrl.SpritesPerRow;
+        var sx = col * tile;
+        var sy = row * tile;
+        for (var py = 0; py < tile; py++)
+        for (var px = 0; px < tile; px++)
+        {
+            var ci = _bus.Sprite.SGet(sx + px, sy + py);
+            var color = MapTileRenderColors.SpritePixel(ci, mapX, mapY, _ctrl.ColorChip);
+            FillBlockScreen(ptr, stride, tileScreenX + px * zoom, tileScreenY + py * zoom, zoom, 1, color);
+        }
+        if (_ctrl.Viewport.HexView)
+            DrawHexDigit(ptr, stride, tileScreenX, tileScreenY, tileId);
+    }
+
+    private static void DrawHexDigit(nint ptr, int stride, int px, int py, int value)
+    {
+        unsafe
+        {
+            *(uint*)(ptr + py * stride + px * 4) = 0xFFCCCCCC;
+            if (px + 4 < stride / 4)
+                *(uint*)(ptr + py * stride + (px + 4) * 4) = (uint)(0xFF000000 | ((value & 0xF0) << 16) | ((value & 0x0F) << 8));
         }
     }
 
-    private void DrawSelectionRect(nint ptr, int stride, int tx, int ty, int tw, int th)
+    private void DrawSelection(nint ptr, int stride, (int x, int y, int w, int h) sel, MapEditorViewport vp)
     {
-        var tile = _vm.TileSize;
-        var color = 0xFFFFCC00;
-        var left = tx * tile * MapZoom;
-        var top = ty * tile * MapZoom;
-        var right = (tx + tw) * tile * MapZoom;
-        var bottom = (ty + th) * tile * MapZoom;
-
+        var color = 0xFFFFCC00u;
+        var tile = _ctrl.TileSize;
+        var zoom = _ctrl.Viewport.Zoom;
+        var left = (sel.x - vp.StartMapX) * vp.CellPixels - vp.SubPixelOffsetX;
+        var top = (sel.y - vp.StartMapY) * vp.CellPixels - vp.SubPixelOffsetY;
+        var right = left + sel.w * tile * zoom;
+        var bottom = top + sel.h * tile * zoom;
         unsafe
         {
             for (var x = left; x < right; x++)
             {
-                *(uint*)(ptr + top * stride + x * 4) = color;
-                *(uint*)(ptr + (bottom - 1) * stride + x * 4) = color;
+                PutPixel(ptr, stride, x, top, color);
+                PutPixel(ptr, stride, x, bottom - 1, color);
             }
             for (var y = top; y < bottom; y++)
             {
-                *(uint*)(ptr + y * stride + left * 4) = color;
-                *(uint*)(ptr + y * stride + (right - 1) * 4) = color;
+                PutPixel(ptr, stride, left, y, color);
+                PutPixel(ptr, stride, right - 1, y, color);
             }
         }
     }
 
-    private Control BuildLayout()
+    private void RefreshNavigator()
     {
-        var root = new Grid
+        if (_bus == null) return;
+        _navigator.Configure(_ctrl.TileSize, _ctrl.SpriteBankCount);
+        _navigator.SetSelectedTile(_ctrl.SelectedTile, _ctrl.SpriteBank);
+        _navigator.SetHighlightTiles(_ctrl.Selection.NavigatorSprites);
+        _navigator.Render((ptr, stride, col, row, tileIndex) =>
         {
-            RowDefinitions = new RowDefinitions("Auto,*"),
-            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
-            Background = new SolidColorBrush(Color.Parse("#1E1E1E")),
-        };
-
-        var toolbar = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 4,
-            Margin = new Thickness(8, 4),
-        };
-        foreach (var (tool, label) in new (string, string)[]
-        {
-            ("pencil", "✏ Paint"), ("fill", "🪣 Fill"), ("rect", "▭ Rect"),
-            ("select", "⬚ Select"), ("copy", "📋"), ("paste", "📌"),
-        })
-        {
-            var t = tool;
-            var btn = new Button { Content = label, FontSize = 11, Padding = new Thickness(6, 2), Tag = t };
-            btn.Click += (_, _) => _vm.SelectedTool = t;
-            toolbar.Children.Add(btn);
-        }
-
-        for (var layer = 0; layer < 8; layer++)
-        {
-            var l = layer;
-            var layerBtn = new Button
+            if (tileIndex >= _ctrl.SpriteCount) return;
+            var tcol = tileIndex % _ctrl.SpritesPerRow;
+            var trow = tileIndex / _ctrl.SpritesPerRow;
+            var tile = _ctrl.TileSize;
+            for (var py = 0; py < tile; py++)
+            for (var px = 0; px < tile; px++)
             {
-                Content = $"L{layer}",
-                FontSize = 11,
-                Padding = new Thickness(6, 2),
-                Tag = l,
-            };
-            layerBtn.Click += (_, _) => _vm.CurrentLayer = l;
-            _layerButtons.Add(layerBtn);
-            toolbar.Children.Add(layerBtn);
-        }
-        UpdateLayerButtons();
-
-        var undoBtn = new Button { Content = "Undo", FontSize = 11, Padding = new Thickness(6, 2) };
-        undoBtn.Click += (_, _) =>
-        {
-            _vm.UndoRegion(_lastUndoX, _lastUndoY, _lastUndoW, _lastUndoH);
-            RefreshMap();
-        };
-        toolbar.Children.Add(undoBtn);
-
-        Grid.SetColumnSpan(toolbar, 2);
-        root.Children.Add(toolbar);
-
-        var left = new StackPanel { Margin = new Thickness(8), Spacing = 4, Width = 400 };
-        left.Children.Add(new TextBlock { Text = "Tiles", Foreground = Brushes.LightGray, FontSize = 11 });
-        _tilePickerImage = new Image { Stretch = Stretch.None };
-        _tilePickerImage.PointerPressed += OnTilePickerPressed;
-        left.Children.Add(new ScrollViewer { MaxHeight = 220, Content = _tilePickerImage });
-        _tileLabel = new TextBlock { Text = "Tile #0", Foreground = Brushes.LightGray, FontSize = 11 };
-        left.Children.Add(_tileLabel);
-
-        _mapImage = new Image { Stretch = Stretch.None };
-        _mapImage.PointerPressed += OnMapPointerPressed;
-        _mapImage.PointerMoved += OnMapPointerMoved;
-
-        Grid.SetRow(left, 1);
-        Grid.SetRow(_mapImage, 1);
-        Grid.SetColumn(_mapImage, 1);
-        root.Children.Add(left);
-        var mapScroller = new ScrollViewer
-        {
-            Margin = new Thickness(8),
-            Content = _mapImage,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-        };
-        Grid.SetRow(mapScroller, 1);
-        Grid.SetColumn(mapScroller, 1);
-        root.Children.Add(mapScroller);
-
-        return root;
-    }
-
-    private void UpdateTileLabel() => _tileLabel.Text = $"Tile #{_vm.SelectedTile}  Layer {_vm.CurrentLayer}";
-
-    private void UpdateLayerButtons()
-    {
-        foreach (var btn in _layerButtons)
-        {
-            if (btn.Tag is int layer)
-            {
-                btn.Background = layer == _vm.CurrentLayer
-                    ? new SolidColorBrush(Color.Parse("#569CD6"))
-                    : Brushes.Transparent;
-                btn.Foreground = layer == _vm.CurrentLayer ? Brushes.White : Brushes.LightGray;
+                var c = Pico8Colors.ToBgra(_bus.Sprite.SGet(tcol * tile + px, trow * tile + py), _ctrl.ColorChip);
+                SpriteNavigatorView.FillPixelBlock(ptr, stride, col * tile + px, row * tile + py, 3, c, 8 * tile, 8 * tile);
             }
-        }
+        });
     }
 
-    private void OnTilePickerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        var pt = e.GetPosition(_tilePickerImage);
-        var sx = (int)(pt.X / PickerZoom);
-        var sy = (int)(pt.Y / PickerZoom);
-        if (sx < 0 || sy < 0 || sx >= _vm.SheetWidth || sy >= _vm.SheetHeight) return;
-        var col = sx / _vm.TileSize;
-        var row = sy / _vm.TileSize;
-        _vm.SelectedTile = row * _vm.SpritesPerRow + col;
-        HighlightSelectedTile();
-    }
-
-    private void OnMapPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        _isPainting = true;
-        _strokeUndoPushed = false;
-        var (tx, ty) = MapCoords(e);
-        HandleMapAction(tx, ty, isStart: true);
-    }
-
-    private void OnMapPointerMoved(object? sender, PointerEventArgs e)
-    {
-        if (!_isPainting) return;
-        var (tx, ty) = MapCoords(e);
-        HandleMapAction(tx, ty, isStart: false);
-    }
-
-    protected override void OnPointerReleased(PointerReleasedEventArgs e)
-    {
-        base.OnPointerReleased(e);
-        if (_isPainting && _vm.SelectedTool == "rect" && _rectStart is { } start)
-        {
-            var (tx, ty) = MapCoords(e);
-            _vm.FillRect(start.x, start.y, tx, ty);
-            RecordUndoRegion(start.x, start.y, tx, ty);
-            RefreshMap();
-        }
-        _isPainting = false;
-        _rectStart = null;
-    }
-
-    private (int x, int y) MapCoords(PointerEventArgs e)
+    private (int mapX, int mapY) MapCoords(PointerEventArgs e)
     {
         var pt = e.GetPosition(_mapImage);
-        var tile = _vm.TileSize;
-        var tx = (int)(pt.X / (tile * MapZoom));
-        var ty = (int)(pt.Y / (tile * MapZoom));
-        return (tx, ty);
+        return CurrentViewport().PointerToMapTile(pt.X, pt.Y);
     }
 
-    private void HandleMapAction(int tx, int ty, bool isStart)
+    private void UpdateHoverFromPointer(PointerEventArgs e)
     {
-        if (tx < 0 || ty < 0 || tx >= _vm.MapWidth || ty >= _vm.MapHeight) return;
+        var (mapX, mapY) = MapCoords(e);
+        if (mapX >= 0 && mapX < _ctrl.MapWidth && mapY >= 0 && mapY < _ctrl.MapHeight)
+            _ctrl.SetHoverTile(mapX, mapY);
+        else
+            _ctrl.ClearHoverTile();
+    }
 
-        switch (_vm.SelectedTool)
+    private void OnMapPressed(object? sender, PointerPressedEventArgs e)
+    {
+        Focus();
+        UpdateHoverFromPointer(e);
+        var (tx, ty) = MapCoords(e);
+        var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+
+        if (_ctrl.SelectedTool == "pan" || _keyModifiers.HasFlag(KeyModifiers.Shift) && _ctrl.SelectedTool != "select")
         {
-            case "fill":
-                if (isStart)
-                {
-                    _vm.FloodFill(tx, ty);
-                    RecordUndoRegion(0, 0, _vm.MapWidth - 1, _vm.MapHeight - 1);
-                    RefreshMap();
-                }
-                break;
-            case "rect":
-                if (isStart) _rectStart = (tx, ty);
-                break;
-            case "select":
-                if (isStart) _rectStart = (tx, ty);
-                else if (_rectStart is { } s)
-                {
-                    var left = Math.Min(s.x, tx);
-                    var top = Math.Min(s.y, ty);
-                    var w = Math.Abs(tx - s.x) + 1;
-                    var h = Math.Abs(ty - s.y) + 1;
-                    _selection = (left, top, w, h);
-                    RefreshMap();
-                }
-                break;
-            case "copy":
-                if (isStart && _selection is { } sel)
-                    _vm.CopySelection(sel.x, sel.y, sel.w, sel.h);
-                break;
-            case "paste":
-                if (isStart)
-                {
-                    _vm.PasteSelection(tx, ty);
-                    RecordUndoRegion(tx, ty, tx, ty);
-                    RefreshMap();
-                }
-                break;
-            case "pencil":
-            default:
-                if (!_strokeUndoPushed)
-                {
-                    _vm.PushUndoRegion(tx, ty, 1, 1, "paint");
-                    _strokeUndoPushed = true;
-                    _lastUndoX = tx;
-                    _lastUndoY = ty;
-                    _lastUndoW = 1;
-                    _lastUndoH = 1;
-                }
-                _vm.PaintTile(tx, ty);
-                RefreshMap();
-                break;
+            _panDragging = true;
+            _panLastX = (int)e.GetPosition(_mapImage).X;
+            _panLastY = (int)e.GetPosition(_mapImage).Y;
+            return;
+        }
+
+        _isPainting = true;
+        _ctrl.HandlePointerDown(tx, ty, ctrl, shift, e.GetCurrentPoint(_mapImage).Properties.IsRightButtonPressed);
+    }
+
+    private void OnMapMoved(object? sender, PointerEventArgs e)
+    {
+        UpdateHoverFromPointer(e);
+
+        if (_panDragging)
+        {
+            var pt = e.GetPosition(_mapImage);
+            _ctrl.PanByPixels((int)pt.X - _panLastX, (int)pt.Y - _panLastY);
+            _panLastX = (int)pt.X;
+            _panLastY = (int)pt.Y;
+            RebuildMapBitmap();
+            return;
+        }
+
+        if (!_isPainting) return;
+        var (mapX, mapY) = MapCoords(e);
+        _ctrl.HandlePointerMove(mapX, mapY, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+    }
+
+    private void OnMapReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (_panDragging) { _panDragging = false; return; }
+        if (!_isPainting) return;
+        var (tx, ty) = MapCoords(e);
+        _ctrl.HandlePointerUp(tx, ty, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+        _isPainting = false;
+    }
+
+    private void OnMapWheel(object? sender, PointerWheelEventArgs e)
+    {
+        _ctrl.Viewport.AdjustZoom(e.Delta.Y > 0 ? 1 : -1);
+        e.Handled = true;
+    }
+
+    private void OnNavigatorTile(int col, int row, int bank, int tileIndex, bool shift)
+    {
+        if (tileIndex >= _ctrl.SpriteCount) return;
+        _ctrl.SpriteBank = bank;
+        _ctrl.SelectTileFromNavigator(tileIndex, shift);
+
+        if (_moveService.HasCutPending && _spriteCtrl != null && _bus != null
+            && _ctrl.Selection.MapRect is not null)
+        {
+            _moveService.ApplyPaste(_bus, _ctrl, _spriteCtrl, tileIndex);
         }
     }
 
-    private void RecordUndoRegion(int x0, int y0, int x1, int y1)
+    private void OnNavigatorDrag(int c0, int r0, int c1, int r1) =>
+        _ctrl.SelectTilesInNavigatorRect(c0, r0, c1, r1);
+
+    private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        _lastUndoX = Math.Min(x0, x1);
-        _lastUndoY = Math.Min(y0, y1);
-        _lastUndoW = Math.Abs(x1 - x0) + 1;
-        _lastUndoH = Math.Abs(y1 - y0) + 1;
+        _keyModifiers = e.KeyModifiers;
+        if (e.Key == Key.Space) _ctrl.SetSpaceHeld(true);
+
+        var key = e.Key.ToString();
+        var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+
+        if (ctrl && key == "X" && _spriteCtrl != null && _ctrl.Selection.HasNavigatorSelection)
+        {
+            if (_moveService.BeginCut(_spriteCtrl, _ctrl.Selection.NavigatorSprites))
+            {
+                _ctrl.CrossTabHint = _moveService.StatusHint;
+                e.Handled = true;
+                return;
+            }
+        }
+
+        if (ctrl && key == "V" && _moveService.HasCutPending && _spriteCtrl != null && _bus != null)
+        {
+            if (_moveService.ApplyPaste(_bus, _ctrl, _spriteCtrl, _ctrl.SelectedTile))
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
+        if (_ctrl.HandleKey(key, ctrl, shift, alt))
+        {
+            e.Handled = true;
+            RefreshAll();
+        }
+    }
+
+    private void OnKeyUp(object? sender, KeyEventArgs e)
+    {
+        _keyModifiers = e.KeyModifiers;
+        if (e.Key == Key.Space) _ctrl.SetSpaceHeld(false);
+    }
+
+    private void OnTextInput(object? sender, TextInputEventArgs e)
+    {
+        if (e.Text != null && _ctrl.HandleTextInput(e.Text))
+        {
+            e.Handled = true;
+            RefreshAll();
+        }
+    }
+
+    private static unsafe void ClearBitmap(nint ptr, int stride, int w, int h, uint color)
+    {
+        for (var y = 0; y < h; y++)
+        for (var x = 0; x < w; x++)
+            *(uint*)(ptr + y * stride + x * 4) = color;
+    }
+
+    private static unsafe void FillBlockScreen(nint ptr, int stride, int screenX, int screenY, int zoom, int blockSize, uint color)
+    {
+        for (var ty = 0; ty < blockSize; ty++)
+        for (var tx = 0; tx < blockSize; tx++)
+        for (var zy = 0; zy < zoom; zy++)
+        for (var zx = 0; zx < zoom; zx++)
+            PutPixel(ptr, stride, screenX + (tx * zoom) + zx, screenY + (ty * zoom) + zy, color);
     }
 }

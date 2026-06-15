@@ -21,7 +21,12 @@ public sealed class HardwareProfile
         Palette = new PaletteSpec { Colors = 16, TransparentIndex = 0 },
         Sprites = new SpriteSpec { SheetWidth = 128, SheetHeight = 128, TileSize = 8, MaxOnScreen = 128 },
         Map = new MapSpec { Width = 128, Height = 64, TileSize = 8 },
-        Memory = new MemorySpec { Ram = 32768, CartRom = 32768 },
+        Memory = new MemorySpec
+        {
+            Ram = 32768,
+            CartRom = 32768,
+            MapLayout = new MapMemoryLayout { MapPrimaryRows = 32 },
+        },
         Audio = new AudioSpec { Channels = 4, SfxSlots = 64, MusicPatterns = 64, SampleRate = 22050 },
         Code = new CodeSpec { MaxTokens = 8192 },
         Cartridge = new CartridgeSpec { MaxBytes = 32768 }
@@ -60,6 +65,7 @@ public sealed class MemorySpec
 {
     public int Ram { get; set; } = 32768;
     public int CartRom { get; set; } = 32768;
+    public MapMemoryLayout? MapLayout { get; set; }
 }
 
 public sealed class AudioSpec

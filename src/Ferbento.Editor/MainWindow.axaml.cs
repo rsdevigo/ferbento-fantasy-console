@@ -105,6 +105,10 @@ public partial class MainWindow : Window
             tilemapView?.RefreshPalette();
         };
 
+        tilemapView!.SetSpriteController(spriteView!.Controller);
+        spriteView!.Controller.Edited += () => tilemapView.RefreshFromBus();
+        tilemapView!.Controller.Edited += () => spriteView.RefreshFromBus();
+
         _session.PropagateToEditors();
     }
 

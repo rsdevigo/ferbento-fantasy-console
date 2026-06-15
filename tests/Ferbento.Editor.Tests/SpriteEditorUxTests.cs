@@ -37,6 +37,110 @@ public class SpriteEditorUxTests
     }
 
     [Fact]
+    public void ViewportState_ZoomClampsToMaxZoom()
+    {
+        var viewport = new ViewportState { MaxZoom = 8, Zoom = 16 };
+        Assert.Equal(8, viewport.Zoom);
+    }
+
+    [Fact]
+    public void HandleKey_BrushSizeBrackets()
+    {
+        var controller = new SpriteEditorController();
+        controller.HandleKey("B", false, false, false);
+        controller.AdjustBrushSize(1);
+        Assert.Equal(2, controller.BrushSize);
+
+        Assert.True(controller.HandleKey("OemOpenBrackets", false, false, false));
+        Assert.Equal(1, controller.BrushSize);
+
+        Assert.True(controller.HandleKey("OemCloseBrackets", false, false, false));
+        Assert.Equal(2, controller.BrushSize);
+    }
+
+    [Fact]
+    public void HandleKey_BrushSmaller_AllowsAltGrModifiers()
+    {
+        var controller = new SpriteEditorController();
+        controller.HandleKey("B", false, false, false);
+        controller.AdjustBrushSize(1);
+        Assert.Equal(2, controller.BrushSize);
+
+        Assert.True(controller.HandleKey("OemQuotes", ctrl: true, shift: false, alt: true));
+        Assert.Equal(1, controller.BrushSize);
+    }
+
+    [Fact]
+    public void HandleTextInput_BrushSizeBrackets()
+    {
+        var controller = new SpriteEditorController();
+        controller.HandleKey("B", false, false, false);
+        controller.AdjustBrushSize(1);
+        Assert.Equal(2, controller.BrushSize);
+
+        Assert.True(controller.HandleTextInput("["));
+        Assert.Equal(1, controller.BrushSize);
+
+        Assert.True(controller.HandleTextInput("]"));
+        Assert.Equal(2, controller.BrushSize);
+    }
+
+    [Fact]
+    public void HandleKey_ZoomPlusMinus()
+    {
+        var controller = new SpriteEditorController();
+        controller.Viewport.Zoom = 8;
+        controller.Viewport.MaxZoom = 32;
+
+        Assert.True(controller.HandleKey("OemPlus", false, false, false));
+        Assert.Equal(9, controller.Viewport.Zoom);
+
+        Assert.True(controller.HandleKey("OemMinus", false, false, false));
+        Assert.Equal(8, controller.Viewport.Zoom);
+    }
+
+    [Fact]
+    public void HandleTextInput_ZoomPlusMinus()
+    {
+        var controller = new SpriteEditorController();
+        controller.Viewport.Zoom = 8;
+        controller.Viewport.MaxZoom = 32;
+
+        Assert.True(controller.HandleTextInput("+"));
+        Assert.Equal(9, controller.Viewport.Zoom);
+
+        Assert.True(controller.HandleTextInput("-"));
+        Assert.Equal(8, controller.Viewport.Zoom);
+    }
+
+    [Fact]
+    public void ComputeFitZoom_UsesPanelAndViewSize()
+    {
+        var controller = new SpriteEditorController();
+        var bus = new ChipBus(BuiltInProfiles.Pico8());
+        controller.SetChipBus(bus);
+        controller.SetCanvasPanelSize(128, 128);
+        controller.UpdateViewRegion();
+
+        Assert.Equal(16, controller.ComputeFitZoom());
+    }
+
+    [Fact]
+    public void NavigateSprite_UsesLastTileInMultiSelection()
+    {
+        var controller = new SpriteEditorController();
+        var bus = new ChipBus(BuiltInProfiles.Pico8());
+        controller.SetChipBus(bus);
+        controller.SelectSpritesInSheetRect(0, 0, 15, 7);
+
+        controller.NavigateSprite(1);
+
+        Assert.False(controller.Selection.HasSpriteSelection);
+        Assert.Equal(2, controller.CurrentSpriteIndex);
+        Assert.Equal(8, controller.ViewWidth);
+    }
+
+    [Fact]
     public void SpriteEditorInputMap_BrushBindings()
     {
         Assert.Equal("B", SpriteEditorInputMap.DefaultBindings[SpriteEditorAction.ToolPencil]);
@@ -116,5 +220,80 @@ public class SpriteEditorUxTests
 
         Assert.Null(controller.CursorPreviewPosition);
         Assert.Null(controller.CursorPreviewTool);
+    }
+
+    [Fact]
+    public void AddSpriteToSelection_ExpandsViewRegionToBoundingBox()
+    {
+        var controller = new SpriteEditorController();
+        var bus = new ChipBus(BuiltInProfiles.Pico8());
+        controller.SetChipBus(bus);
+        controller.CurrentSpriteIndex = 0;
+
+        controller.AddSpriteToSelection(1);
+
+        Assert.Equal(16, controller.ViewWidth);
+        Assert.Equal(8, controller.ViewHeight);
+        Assert.Equal(2, controller.Selection.SpriteIndices.Count);
+    }
+
+    [Fact]
+    public void AddSpriteToSelection_RejectsNonAdjacentSprite()
+    {
+        var controller = new SpriteEditorController();
+        var bus = new ChipBus(BuiltInProfiles.Pico8());
+        controller.SetChipBus(bus);
+        controller.CurrentSpriteIndex = 0;
+
+        controller.AddSpriteToSelection(2);
+
+        Assert.Equal(8, controller.ViewWidth);
+        Assert.Equal(8, controller.ViewHeight);
+        Assert.False(controller.Selection.HasSpriteSelection);
+    }
+
+    [Fact]
+    public void AddSpriteToSelection_RejectsExpansionBeyondFourTiles()
+    {
+        var controller = new SpriteEditorController();
+        var bus = new ChipBus(BuiltInProfiles.Pico8());
+        controller.SetChipBus(bus);
+        controller.SelectSpritesInSheetRect(0, 0, 31, 7);
+        Assert.Equal(32, controller.ViewWidth);
+        Assert.Equal(4, controller.Selection.SpriteIndices.Count);
+
+        controller.AddSpriteToSelection(4);
+
+        Assert.Equal(32, controller.ViewWidth);
+        Assert.Equal(4, controller.Selection.SpriteIndices.Count);
+    }
+
+    [Fact]
+    public void UpdateViewRegion_UsesRectangularSpriteSelection()
+    {
+        var controller = new SpriteEditorController();
+        var bus = new ChipBus(BuiltInProfiles.Pico8());
+        controller.SetChipBus(bus);
+        controller.Selection.SetSprites([1]);
+
+        controller.UpdateViewRegion();
+
+        Assert.Equal(8, controller.ViewWidth);
+        Assert.Equal(8, controller.ViewHeight);
+    }
+
+    [Fact]
+    public void ClearSelection_ResetsViewRegionToSingleSprite()
+    {
+        var controller = new SpriteEditorController();
+        var bus = new ChipBus(BuiltInProfiles.Pico8());
+        controller.SetChipBus(bus);
+        controller.AddSpriteToSelection(1);
+        controller.Selection.Clear();
+
+        controller.UpdateViewRegion();
+
+        Assert.Equal(8, controller.ViewWidth);
+        Assert.Equal(8, controller.ViewHeight);
     }
 }

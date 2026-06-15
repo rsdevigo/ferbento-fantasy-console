@@ -67,14 +67,17 @@ public sealed class SpriteDocument
 
     public void SetViewRegion(int sheetX, int sheetY, int width, int height)
     {
+        var maxTiles = 4;
+        var maxW = TileSize * maxTiles;
+        var maxH = TileSize * maxTiles;
         _viewOriginSheetX = Math.Max(0, sheetX);
         _viewOriginSheetY = Math.Max(0, sheetY);
-        _viewWidth = Math.Max(TileSize, width);
-        _viewHeight = Math.Max(TileSize, height);
+        _viewWidth = Math.Max(TileSize, Math.Min(width, maxW));
+        _viewHeight = Math.Max(TileSize, Math.Min(height, maxH));
         if (_bus != null)
         {
-            _viewWidth = Math.Min(_viewWidth, SheetWidth - _viewOriginSheetX);
-            _viewHeight = Math.Min(_viewHeight, SheetHeight - _viewOriginSheetY);
+            _viewWidth = Math.Max(TileSize, Math.Min(_viewWidth, SheetWidth - _viewOriginSheetX));
+            _viewHeight = Math.Max(TileSize, Math.Min(_viewHeight, SheetHeight - _viewOriginSheetY));
         }
     }
 
