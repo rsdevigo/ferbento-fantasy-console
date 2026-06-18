@@ -65,6 +65,8 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
             if (_selectedTool == value) return;
             if (value != "stamp")
                 StampTool.ClearPreview(_ctx);
+            if (value != "select")
+                ClearSelectPreview(_ctx);
             if (!SupportsCursorPreview(value))
                 ClearCursorPreview();
             _selectedTool = value;
@@ -76,6 +78,8 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
     public ShapeMode ShapeMode => _shapeHost.Mode;
     public (int x, int y)? StampPreviewPosition => _ctx.StampPreviewPosition;
     public bool StampPreviewSkipTransparent => _ctx.StampPreviewSkipTransparent;
+    public (int x, int y)? SelectAnchor => _ctx.SelectAnchor;
+    public (int x, int y)? SelectPreviewEnd => _ctx.SelectPreviewEnd;
     public (int x, int y)? CursorPreviewPosition => _ctx.CursorPreviewPosition;
     public string? CursorPreviewTool => _ctx.CursorPreviewTool;
 
@@ -444,6 +448,31 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
 
     public void ClearStampPreview() => StampTool.ClearPreview(_ctx);
 
+    public void UpdateSelectPreview(PointerInput input)
+    {
+        if (SelectedTool != "select" || _ctx.SelectAnchor == null) return;
+        _ctx.SelectPreviewEnd = (input.LocalX, input.LocalY);
+        RequestRefresh();
+    }
+
+    public void ClearSelectPreview() => ClearSelectPreview(_ctx);
+
+    public static void ClearSelectPreview(SpriteEditorContext ctx)
+    {
+        ctx.SelectAnchor = null;
+        ctx.SelectPreviewEnd = null;
+        ctx.RequestRefresh?.Invoke();
+    }
+
+    public static (int x, int y, int w, int h) NormalizeRect((int x, int y) a, (int x, int y) b, int maxX, int maxY)
+    {
+        var left = Math.Clamp(Math.Min(a.x, b.x), 0, maxX);
+        var top = Math.Clamp(Math.Min(a.y, b.y), 0, maxY);
+        var right = Math.Clamp(Math.Max(a.x, b.x), 0, maxX);
+        var bottom = Math.Clamp(Math.Max(a.y, b.y), 0, maxY);
+        return (left, top, right - left + 1, bottom - top + 1);
+    }
+
     private static bool SupportsCursorPreview(string tool) =>
         tool is "pencil" or "eraser" or "fill" or "picker";
 
@@ -625,6 +654,7 @@ public sealed class SpriteEditorController : INotifyPropertyChanged
             case SpriteEditorAction.MoveRight: MoveSelection(1, 0); return true;
             case SpriteEditorAction.ClearSelection:
                 Selection.Clear();
+                ClearSelectPreview(_ctx);
                 GetActiveTool()?.OnCancel(_ctx);
                 UpdateViewRegion();
                 return true;

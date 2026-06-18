@@ -15,4 +15,19 @@ public static class MapTileRenderColors
 
         return Pico8Colors.ToBgra(colorIndex, colorChip, Checkerboard(mapX, mapY));
     }
+
+    public static bool SpriteTileIsEmpty(ChipBus bus, int tileId, int tileSize, int spritesPerRow, int transparentIndex)
+    {
+        var col = tileId % spritesPerRow;
+        var row = tileId / spritesPerRow;
+        var sx = col * tileSize;
+        var sy = row * tileSize;
+        for (var py = 0; py < tileSize; py++)
+        for (var px = 0; px < tileSize; px++)
+        {
+            if (bus.Sprite.SGet(sx + px, sy + py) != transparentIndex)
+                return false;
+        }
+        return true;
+    }
 }

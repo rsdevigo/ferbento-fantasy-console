@@ -6,105 +6,59 @@ public sealed class SelectionTool : ISpriteTool
 
     public void OnPointerDown(SpriteEditorContext ctx, PointerInput input)
     {
-        if (ctx.Selection.HasPixelSelection && ctx.Selection.ContainsLocalPixel(input.LocalX, input.LocalY))
+        if (ctx.SelectAnchor is { } anchor)
         {
-            ctx.IsMovingSelection = true;
-            ctx.MoveSelectionOffset = (input.LocalX - ctx.Selection.PixelX, input.LocalY - ctx.Selection.PixelY);
+            FinalizeSelection(ctx, anchor, (input.LocalX, input.LocalY), input);
+            ctx.SelectAnchor = null;
+            ctx.SelectPreviewEnd = null;
             return;
         }
 
         ctx.Selection.Clear();
-        ctx.SelectDragStart = (input.LocalX, input.LocalY);
+        ctx.SelectAnchor = (input.LocalX, input.LocalY);
+        ctx.SelectPreviewEnd = (input.LocalX, input.LocalY);
+        ctx.RequestRefresh?.Invoke();
     }
 
-    public void OnPointerMove(SpriteEditorContext ctx, PointerInput input)
+    public void OnPointerMove(SpriteEditorContext ctx, PointerInput input) { }
+
+    public void OnPointerUp(SpriteEditorContext ctx, PointerInput input) { }
+
+    public void OnCancel(SpriteEditorContext ctx)
     {
-        if (ctx.IsMovingSelection && ctx.MoveSelectionOffset is { } offset && ctx.Selection.PixelBuffer != null)
-        {
-            var destX = input.LocalX - offset.x;
-            var destY = input.LocalY - offset.y;
-            ctx.Selection.SetPixelRect(destX, destY,
-                destX + ctx.Selection.PixelWidth - 1,
-                destY + ctx.Selection.PixelHeight - 1,
-                ctx.Selection.PixelBuffer);
-            ctx.RequestRefresh?.Invoke();
-            return;
-        }
-
-        if (ctx.SelectDragStart is { } start)
-        {
-            ctx.Selection.SetPixelRect(start.x, start.y, input.LocalX, input.LocalY);
-            ctx.RequestRefresh?.Invoke();
-        }
+        ctx.Selection.Clear();
+        ctx.SelectAnchor = null;
+        ctx.SelectPreviewEnd = null;
     }
 
-    public void OnPointerUp(SpriteEditorContext ctx, PointerInput input)
+    internal static void FinalizeSelection(
+        SpriteEditorContext ctx,
+        (int x, int y) anchor,
+        (int x, int y) end,
+        PointerInput input)
     {
-        if (ctx.SelectDragStart is { } start)
+        var vw = ctx.Document.ViewWidth;
+        var vh = ctx.Document.ViewHeight;
+        var maxX = Math.Max(0, vw - 1);
+        var maxY = Math.Max(0, vh - 1);
+        var left = Math.Clamp(Math.Min(anchor.x, end.x), 0, maxX);
+        var top = Math.Clamp(Math.Min(anchor.y, end.y), 0, maxY);
+        var right = Math.Clamp(Math.Max(anchor.x, end.x), 0, maxX);
+        var bottom = Math.Clamp(Math.Max(anchor.y, end.y), 0, maxY);
+        var w = right - left + 1;
+        var h = bottom - top + 1;
+        var buf = ctx.Document.ReadLocalRegion(left, top, w, h);
+
+        if (input.Ctrl)
         {
-            var vw = ctx.Document.ViewWidth;
-            var vh = ctx.Document.ViewHeight;
-            var maxX = Math.Max(0, vw - 1);
-            var maxY = Math.Max(0, vh - 1);
-            var left = Math.Clamp(Math.Min(start.x, input.LocalX), 0, maxX);
-            var top = Math.Clamp(Math.Min(start.y, input.LocalY), 0, maxY);
-            var right = Math.Clamp(Math.Max(start.x, input.LocalX), 0, maxX);
-            var bottom = Math.Clamp(Math.Max(start.y, input.LocalY), 0, maxY);
-            var w = right - left + 1;
-            var h = bottom - top + 1;
-            var buf = ctx.Document.ReadLocalRegion(left, top, w, h);
-
-            if (input.Ctrl)
-            {
-                for (var i = 0; i < buf.Length; i++)
-                    if (buf[i] != 0) buf[i] = 0;
-                ctx.BeginStroke();
-                ctx.Document.WriteLocalRegion(left, top, w, h, buf);
-                ctx.EndStroke();
-            }
-
-            ctx.Selection.SetPixelRect(left, top, right, bottom, buf);
-            ctx.SelectDragStart = null;
-            ctx.RequestRefresh?.Invoke();
-            return;
+            for (var i = 0; i < buf.Length; i++)
+                if (buf[i] != 0) buf[i] = 0;
+            ctx.BeginStroke();
+            ctx.Document.WriteLocalRegion(left, top, w, h, buf);
+            ctx.EndStroke();
         }
 
-        if (ctx.IsMovingSelection && ctx.Selection.PixelBuffer != null)
-        {
-            var vw = ctx.Document.ViewWidth;
-            var vh = ctx.Document.ViewHeight;
-            var destX = ctx.Selection.PixelX;
-            var destY = ctx.Selection.PixelY;
-            var w = ctx.Selection.PixelWidth;
-            var h = ctx.Selection.PixelHeight;
-
-            var before = ctx.Document.GetCurrentSpritePixels();
-            var beforeFlags = ctx.Document.GetCurrentFlags();
-
-            var origLeft = destX - (ctx.MoveSelectionOffset?.x ?? 0);
-            var origTop = destY - (ctx.MoveSelectionOffset?.y ?? 0);
-
-            var clearBuf = new byte[w * h];
-            ctx.Document.WriteLocalRegion(origLeft, origTop, w, h, clearBuf);
-
-            for (var row = 0; row < h; row++)
-            for (var col = 0; col < w; col++)
-            {
-                var lx = destX + col;
-                var ly = destY + row;
-                if (lx >= 0 && lx < vw && ly >= 0 && ly < vh)
-                    ctx.Document.SetLocalPixel(lx, ly, ctx.Selection.PixelBuffer[row * w + col]);
-            }
-
-            var after = ctx.Document.GetCurrentSpritePixels();
-            ctx.Undo.Execute(new Undo.SpritePatchCommand(
-                ctx.Document, ctx.Document.CurrentSpriteIndex, "move",
-                before, after, beforeFlags, beforeFlags));
-            ctx.IsMovingSelection = false;
-            ctx.MoveSelectionOffset = null;
-            ctx.MarkEdited();
-        }
+        ctx.Selection.SetPixelRect(left, top, right, bottom, buf);
+        ctx.RequestRefresh?.Invoke();
     }
-
-    public void OnCancel(SpriteEditorContext ctx) => ctx.Selection.Clear();
 }

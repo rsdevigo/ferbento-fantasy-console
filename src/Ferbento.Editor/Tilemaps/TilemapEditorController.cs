@@ -42,6 +42,7 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
 
     public bool CanUndo => UndoService.UndoCount > 0;
     public bool CanRedo => UndoService.RedoCount > 0;
+    public bool HasClipboard => Clipboard.HasData;
 
     public int MapWidth => Document.MapWidth;
     public int MapHeight => Document.MapHeight;
@@ -57,6 +58,7 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
         set
         {
             if (_selectedTool == value) return;
+            if (value == "stamp" && !Clipboard.HasData) return;
             _ctx.CancelStroke();
             _selectedTool = value;
             OnPropertyChanged();
@@ -124,6 +126,7 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
         _tools = new Dictionary<string, ITilemapTool>
         {
             ["pencil"] = new PaintTool(),
+            ["eraser"] = new EraserTool(),
             ["fill"] = new FillTool(),
             ["select"] = new SelectionTool(),
             ["stamp"] = new StampTool(),
@@ -138,7 +141,13 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
             Viewport = Viewport,
             Undo = UndoService,
             Clipboard = Clipboard,
-            NotifyEdited = () => { Edited?.Invoke(); OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo)); },
+            NotifyEdited = () =>
+            {
+                Edited?.Invoke();
+                OnPropertyChanged(nameof(CanUndo));
+                OnPropertyChanged(nameof(CanRedo));
+            },
+            RequestRepaint = RequestRefresh,
         };
 
         UndoService.StateChanged += () =>
@@ -231,6 +240,10 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
             Selection.ClearNavigator();
             SelectedTile = tileIndex;
         }
+
+        if (tileIndex != 0)
+            Document.SetLayerFlag(tileIndex, CurrentLayer, true);
+
         OnPropertyChanged(nameof(StatusText));
         RequestRefresh();
     }
@@ -293,6 +306,8 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
 
     public void SetSpaceHeld(bool held) => _spaceHeld = held;
 
+    public bool IsSpaceHeld => _spaceHeld;
+
     private string EffectiveTool() =>
         _spaceHeld ? "pan" : (_tools.ContainsKey(_selectedTool) ? _selectedTool : "pencil");
 
@@ -304,9 +319,20 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
 
     public bool HandleKey(string key, bool ctrl, bool shift, bool alt)
     {
+        if (key == "Space")
+        {
+            _spaceHeld = true;
+            return true;
+        }
+
         var action = MapKey(key, ctrl, shift, alt);
         if (action is null) return false;
         return ExecuteAction(action.Value);
+    }
+
+    public void HandleKeyUp(string key)
+    {
+        if (key == "Space") _spaceHeld = false;
     }
 
     public bool HandleTextInput(string text)
@@ -342,9 +368,9 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
         if (key == "S" || (shift && key == "LeftShift")) return TilemapEditorAction.SelectTool;
         if (key == "B") return TilemapEditorAction.ToolPencil;
         if (key == "G") return TilemapEditorAction.ToolFill;
+        if (key == "E") return TilemapEditorAction.ToolEraser;
         if (key == "T") return TilemapEditorAction.ToolStamp;
         if (key == "L") return TilemapEditorAction.ToolShape;
-        if (key == "Space") return TilemapEditorAction.ToolPan;
         return null;
     }
 
@@ -365,6 +391,7 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
                 CutSelection();
                 return true;
             case TilemapEditorAction.Paste:
+                if (!Clipboard.HasData) return false;
                 SelectedTool = "stamp";
                 return true;
             case TilemapEditorAction.PrevTile:
@@ -399,7 +426,11 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
             case TilemapEditorAction.ToolFill:
                 SelectedTool = "fill";
                 return true;
+            case TilemapEditorAction.ToolEraser:
+                SelectedTool = "eraser";
+                return true;
             case TilemapEditorAction.ToolStamp:
+                if (!Clipboard.HasData) return false;
                 SelectedTool = "stamp";
                 return true;
             case TilemapEditorAction.ToolPan:
@@ -440,10 +471,42 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
         if (Selection.HasMapRect && Selection.MapRect is { } r)
         {
             var data = Document.ReadRegion(r.x, r.y, r.w, r.h);
-            Clipboard.Set(data, r.w, r.h);
+            var placed = Document.ReadPlacedRegion(r.x, r.y, r.w, r.h);
+            Clipboard.Set(data, placed, r.w, r.h);
+            OnPropertyChanged(nameof(HasClipboard));
             return;
         }
-        CrossTabHint = "Select map region first, or use navigator + Ctrl+X for sprites";
+
+        if (Selection.HasNavigatorSelection)
+        {
+            CopyNavigatorSelection();
+            OnPropertyChanged(nameof(HasClipboard));
+            return;
+        }
+
+        CrossTabHint = "Select map region or navigator sprites, then Ctrl+C";
+    }
+
+    private void CopyNavigatorSelection()
+    {
+        var placements = TileStampLayout.GetPlacements(
+            SelectedTile,
+            Selection.NavigatorSprites,
+            SpritesPerRow);
+
+        var w = placements.Max(p => p.Dx) + 1;
+        var h = placements.Max(p => p.Dy) + 1;
+        var data = new byte[w * h];
+        var placed = new bool[w * h];
+
+        foreach (var placement in placements)
+        {
+            var idx = placement.Dy * w + placement.Dx;
+            data[idx] = (byte)placement.TileId;
+            placed[idx] = true;
+        }
+
+        Clipboard.Set(data, placed, w, h);
     }
 
     public void CutSelection()
@@ -451,8 +514,10 @@ public sealed class TilemapEditorController : INotifyPropertyChanged
         CopySelection();
         if (!Selection.HasMapRect || Selection.MapRect is not { } r) return;
         var before = Document.ReadRegion(r.x, r.y, r.w, r.h);
+        var beforePlaced = Document.ReadPlacedRegion(r.x, r.y, r.w, r.h);
         var after = new byte[before.Length];
-        UndoService.Execute(new MapRegionCommand(Document, r.x, r.y, r.w, r.h, before, after, CurrentLayer));
+        var afterPlaced = new bool[beforePlaced.Length];
+        UndoService.Execute(new MapRegionCommand(Document, r.x, r.y, r.w, r.h, before, after, CurrentLayer, beforePlaced, afterPlaced));
         Edited?.Invoke();
         RequestRefresh();
     }

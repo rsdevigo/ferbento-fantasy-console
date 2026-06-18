@@ -20,9 +20,8 @@ public sealed class SpriteEditorContext
     public bool IsPanning { get; set; }
     public (int x, int y)? PanStart { get; set; }
     public (int panX, int panY)? PanOrigin { get; set; }
-    public (int x, int y)? SelectDragStart { get; set; }
-    public bool IsMovingSelection { get; set; }
-    public (int x, int y)? MoveSelectionOffset { get; set; }
+    public (int x, int y)? SelectAnchor { get; set; }
+    public (int x, int y)? SelectPreviewEnd { get; set; }
     public (int x, int y)? StampPreviewPosition { get; set; }
     public bool StampPreviewSkipTransparent { get; set; }
     public int BrushSize { get; set; } = 1;

@@ -267,7 +267,19 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
             }
 
             if (Ctrl.Selection.HasPixelSelection)
-                DrawSelectionOverlay(ptr, stride, zoom, vw, vh);
+                DrawSelectionOverlay(ptr, stride, zoom, vw, vh,
+                    Ctrl.Selection.PixelX, Ctrl.Selection.PixelY,
+                    Ctrl.Selection.PixelWidth, Ctrl.Selection.PixelHeight);
+
+            if (Ctrl.SelectedTool == "select"
+                && Ctrl.SelectAnchor is { } selAnchor
+                && Ctrl.SelectPreviewEnd is { } selEnd)
+            {
+                var maxX = Math.Max(0, vw - 1);
+                var maxY = Math.Max(0, vh - 1);
+                var (px, py, pw, ph) = SpriteEditorController.NormalizeRect(selAnchor, selEnd, maxX, maxY);
+                DrawSelectionOverlay(ptr, stride, zoom, vw, vh, px, py, pw, ph);
+            }
 
             if (Ctrl.SelectedTool == "stamp" && Ctrl.Clipboard.HasContent && Ctrl.StampPreviewPosition is { } stampPos)
                 DrawStampGhostOverlay(ptr, stride, zoom, vw, vh, stampPos.x, stampPos.y);
@@ -370,31 +382,34 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         }
     }
 
-    private void DrawSelectionOverlay(nint ptr, int stride, int zoom, int viewW, int viewH)
+    private static unsafe void DrawSelectionOverlay(
+        nint ptr, int stride, int zoom, int viewW, int viewH,
+        int px, int py, int pw, int ph)
     {
-        var sel = Ctrl.Selection;
-        var overlay = 0x80FFFF00u;
-        var maxX = Math.Max(0, viewW - 1);
-        var maxY = Math.Max(0, viewH - 1);
-        var left = Math.Clamp(sel.PixelX, 0, maxX);
-        var top = Math.Clamp(sel.PixelY, 0, maxY);
-        var right = Math.Clamp(sel.PixelX + sel.PixelWidth - 1, 0, maxX);
-        var bottom = Math.Clamp(sel.PixelY + sel.PixelHeight - 1, 0, maxY);
-        for (var y = top; y <= bottom; y++)
-        for (var x = left; x <= right; x++)
+        if (pw <= 0 || ph <= 0) return;
+        var maxScreenW = viewW * zoom;
+        var maxScreenH = viewH * zoom;
+        const uint color = 0xFFFFCC00u;
+        var left = px * zoom;
+        var top = py * zoom;
+        var right = (px + pw) * zoom;
+        var bottom = (py + ph) * zoom;
+        for (var x = left; x < right; x++)
         {
-            var onLeft = x == left;
-            var onRight = x == right;
-            var onTop = y == top;
-            var onBottom = y == bottom;
-            for (var zy = 0; zy < zoom; zy++)
-            for (var zx = 0; zx < zoom; zx++)
-            {
-                if ((onTop && zy == 0) || (onBottom && zy == zoom - 1) ||
-                    (onLeft && zx == 0) || (onRight && zx == zoom - 1))
-                    FillPixelBlock(ptr, stride, x, y, zoom, overlay, viewW, viewH);
-            }
+            PutScreenPixel(ptr, stride, x, top, maxScreenW, maxScreenH, color);
+            PutScreenPixel(ptr, stride, x, bottom - 1, maxScreenW, maxScreenH, color);
         }
+        for (var y = top; y < bottom; y++)
+        {
+            PutScreenPixel(ptr, stride, left, y, maxScreenW, maxScreenH, color);
+            PutScreenPixel(ptr, stride, right - 1, y, maxScreenW, maxScreenH, color);
+        }
+    }
+
+    private static unsafe void PutScreenPixel(nint ptr, int stride, int x, int y, int maxW, int maxH, uint color)
+    {
+        if (x < 0 || y < 0 || x >= maxW || y >= maxH) return;
+        *(uint*)(ptr + y * stride + x * 4) = color;
     }
 
     private void RefreshSheet()
@@ -493,15 +508,21 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
 
     private static unsafe void HighlightRegionRect(nint ptr, int stride, int ox, int oy, int w, int h, int zoom, uint highlight, int sheetW, int sheetH)
     {
-        for (var x = 0; x < w; x++)
+        var maxScreenW = sheetW * zoom;
+        var maxScreenH = sheetH * zoom;
+        var left = ox * zoom;
+        var top = oy * zoom;
+        var right = (ox + w) * zoom;
+        var bottom = (oy + h) * zoom;
+        for (var x = left; x < right; x++)
         {
-            FillPixelBlock(ptr, stride, ox + x, oy, zoom, highlight, sheetW, sheetH);
-            FillPixelBlock(ptr, stride, ox + x, oy + h - 1, zoom, highlight, sheetW, sheetH);
+            PutScreenPixel(ptr, stride, x, top, maxScreenW, maxScreenH, highlight);
+            PutScreenPixel(ptr, stride, x, bottom - 1, maxScreenW, maxScreenH, highlight);
         }
-        for (var y = 0; y < h; y++)
+        for (var y = top; y < bottom; y++)
         {
-            FillPixelBlock(ptr, stride, ox, oy + y, zoom, highlight, sheetW, sheetH);
-            FillPixelBlock(ptr, stride, ox + w - 1, oy + y, zoom, highlight, sheetW, sheetH);
+            PutScreenPixel(ptr, stride, left, y, maxScreenW, maxScreenH, highlight);
+            PutScreenPixel(ptr, stride, right - 1, y, maxScreenW, maxScreenH, highlight);
         }
     }
 
@@ -857,21 +878,26 @@ public class SpriteEditorView : UserControl, IProfileAwareEditor
         var y = (int)(pt.Y / zoom);
         var input = BuildInput(x, y, isStart: false);
 
-        if (!_isDrawing && !Ctrl.IsSpaceHeld)
+        if (!Ctrl.IsSpaceHeld && Ctrl.SelectedTool != "pan")
         {
-            if (Ctrl.SelectedTool == "stamp" && Ctrl.Clipboard.HasContent)
+            if (!_isDrawing && Ctrl.SelectedTool == "stamp" && Ctrl.Clipboard.HasContent)
             {
                 Ctrl.UpdateStampPreview(input);
                 return;
             }
 
+            if (!_isDrawing && Ctrl.SelectedTool == "select" && Ctrl.SelectAnchor != null)
+            {
+                Ctrl.UpdateSelectPreview(input);
+                return;
+            }
+
             Ctrl.UpdateCursorPreview(input);
-            return;
         }
 
         if (!_isDrawing) return;
 
-        if (Ctrl.IsSpaceHeld)
+        if (Ctrl.IsSpaceHeld || Ctrl.SelectedTool == "pan")
         {
             Ctrl.OnPointerMovePan(input);
             return;

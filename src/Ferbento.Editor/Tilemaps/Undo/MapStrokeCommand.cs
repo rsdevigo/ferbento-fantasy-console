@@ -12,6 +12,8 @@ public sealed class MapStrokeCommand : IUndoCommand
     private int _h;
     private byte[] _before;
     private byte[] _after;
+    private bool[] _beforePlaced = [];
+    private bool[] _afterPlaced = [];
 
     public string Name => "paint";
 
@@ -25,6 +27,8 @@ public sealed class MapStrokeCommand : IUndoCommand
         _h = 1;
         _before = doc.ReadRegion(startX, startY, 1, 1);
         _after = (byte[])_before.Clone();
+        _beforePlaced = doc.ReadPlacedRegion(startX, startY, 1, 1);
+        _afterPlaced = (bool[])_beforePlaced.Clone();
     }
 
     public void IncludeTile(int tx, int ty)
@@ -38,6 +42,7 @@ public sealed class MapStrokeCommand : IUndoCommand
         var newW = right - left + 1;
         var newH = bottom - top + 1;
         var expanded = _doc.ReadRegion(left, top, newW, newH);
+        var expandedPlaced = _doc.ReadPlacedRegion(left, top, newW, newH);
 
         for (var row = 0; row < _h; row++)
         for (var col = 0; col < _w; col++)
@@ -46,6 +51,7 @@ public sealed class MapStrokeCommand : IUndoCommand
             var dstX = (_x - left) + col;
             var dstY = (_y - top) + row;
             expanded[dstY * newW + dstX] = _before[srcIdx];
+            expandedPlaced[dstY * newW + dstX] = _beforePlaced[srcIdx];
         }
 
         _x = left;
@@ -53,7 +59,9 @@ public sealed class MapStrokeCommand : IUndoCommand
         _w = newW;
         _h = newH;
         _before = expanded;
+        _beforePlaced = expandedPlaced;
         _after = (byte[])_before.Clone();
+        _afterPlaced = (bool[])_beforePlaced.Clone();
     }
 
     public void CaptureAfter()
@@ -63,9 +71,19 @@ public sealed class MapStrokeCommand : IUndoCommand
             Array.Copy(current, _after, current.Length);
         else
             _after = current;
+
+        _afterPlaced = _doc.ReadPlacedRegion(_x, _y, _w, _h);
     }
 
-    public void Execute() => _doc.WriteRegion(_x, _y, _w, _h, _after, _layer);
+    public void Execute()
+    {
+        _doc.WriteRegion(_x, _y, _w, _h, _after, _layer);
+        _doc.ApplyPlacedRegion(_x, _y, _w, _h, _afterPlaced);
+    }
 
-    public void Undo() => _doc.WriteRegion(_x, _y, _w, _h, _before, _layer, setLayerFlags: false);
+    public void Undo()
+    {
+        _doc.WriteRegion(_x, _y, _w, _h, _before, _layer, setLayerFlags: false);
+        _doc.ApplyPlacedRegion(_x, _y, _w, _h, _beforePlaced);
+    }
 }

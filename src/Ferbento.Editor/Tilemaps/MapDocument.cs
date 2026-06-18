@@ -8,6 +8,7 @@ public sealed class MapDocument
 {
     private ChipBus? _bus;
     private HardwareProfile _profile = HardwareProfile.Pico8();
+    private readonly HashSet<(int x, int y)> _placedCells = [];
 
     public int MapWidth => _bus?.Tilemap.Width ?? _profile.Map.Width;
     public int MapHeight => _bus?.Tilemap.Height ?? _profile.Map.Height;
@@ -23,7 +24,13 @@ public sealed class MapDocument
 
     public void SetProfile(HardwareProfile profile) => _profile = profile;
 
-    public void SetChipBus(ChipBus bus) => _bus = bus;
+    public void SetChipBus(ChipBus bus)
+    {
+        _bus = bus;
+        _placedCells.Clear();
+    }
+
+    public bool IsCellPlaced(int mapX, int mapY) => _placedCells.Contains((mapX, mapY));
 
     public byte[] ReadRegion(int x, int y, int w, int h)
     {
@@ -60,6 +67,53 @@ public sealed class MapDocument
         }
     }
 
+    public void SyncPlacedFromTiles(int x, int y, int w, int h, byte[] data)
+    {
+        for (var row = 0; row < h; row++)
+        for (var col = 0; col < w; col++)
+        {
+            var idx = row * w + col;
+            if (idx >= data.Length) continue;
+            var mx = x + col;
+            var my = y + row;
+            if (mx < 0 || my < 0 || mx >= MapWidth || my >= MapHeight) continue;
+            if (data[idx] == 0)
+                _placedCells.Remove((mx, my));
+            else
+                _placedCells.Add((mx, my));
+        }
+    }
+
+    public bool[] ReadPlacedRegion(int x, int y, int w, int h)
+    {
+        var placed = new bool[w * h];
+        for (var row = 0; row < h; row++)
+        for (var col = 0; col < w; col++)
+        {
+            var mx = x + col;
+            var my = y + row;
+            placed[row * w + col] = mx >= 0 && my >= 0 && mx < MapWidth && my < MapHeight && IsCellPlaced(mx, my);
+        }
+        return placed;
+    }
+
+    public void ApplyPlacedRegion(int x, int y, int w, int h, bool[] placed)
+    {
+        for (var row = 0; row < h; row++)
+        for (var col = 0; col < w; col++)
+        {
+            var idx = row * w + col;
+            if (idx >= placed.Length) continue;
+            var mx = x + col;
+            var my = y + row;
+            if (mx < 0 || my < 0 || mx >= MapWidth || my >= MapHeight) continue;
+            if (placed[idx])
+                _placedCells.Add((mx, my));
+            else
+                _placedCells.Remove((mx, my));
+        }
+    }
+
     public int GetTile(int mapX, int mapY)
     {
         if (_bus == null || mapX < 0 || mapY < 0 || mapX >= MapWidth || mapY >= MapHeight) return 0;
@@ -70,9 +124,16 @@ public sealed class MapDocument
     {
         if (_bus == null || mapX < 0 || mapY < 0 || mapX >= MapWidth || mapY >= MapHeight) return;
         _bus.Tilemap.MSet(mapX, mapY, tileId);
-        // Tile 0 is the empty map default; enabling its layer flag would reveal sprite 0 on every cell.
+        _placedCells.Add((mapX, mapY));
         if (setLayerFlag && tileId != 0)
             SetLayerFlag(tileId, currentLayer, true);
+    }
+
+    public void EraseTile(int mapX, int mapY)
+    {
+        if (_bus == null || mapX < 0 || mapY < 0 || mapX >= MapWidth || mapY >= MapHeight) return;
+        _bus.Tilemap.MSet(mapX, mapY, 0);
+        _placedCells.Remove((mapX, mapY));
     }
 
     public void SetLayerFlag(int tileId, int layer, bool enabled)

@@ -17,15 +17,35 @@ public sealed class PaintTool : ITilemapTool
         Paint(ctx, input.TileX, input.TileY);
     }
 
-    public void OnPointerUp(TilemapEditorContext ctx, TilePointerInput input) =>
+    public void OnPointerUp(TilemapEditorContext ctx, TilePointerInput input)
+    {
+        if (ctx.ActiveStroke == null) return;
         ctx.EndStroke();
+        ctx.NotifyEdited?.Invoke();
+    }
 
     private static void Paint(TilemapEditorContext ctx, int tx, int ty)
     {
         if (!InMap(ctx, tx, ty)) return;
-        ctx.ActiveStroke?.IncludeTile(tx, ty);
-        ctx.Document.SetTile(tx, ty, ctx.SelectedTile, ctx.CurrentLayer);
-        ctx.NotifyEdited?.Invoke();
+
+        var placements = TileStampLayout.GetPlacements(
+            ctx.SelectedTile,
+            ctx.Selection.NavigatorSprites,
+            ctx.Document.SpritesPerRow);
+
+        var painted = false;
+        foreach (var placement in placements)
+        {
+            var mx = tx + placement.Dx;
+            var my = ty + placement.Dy;
+            if (!InMap(ctx, mx, my)) continue;
+            ctx.ActiveStroke?.IncludeTile(mx, my);
+            ctx.Document.SetTile(mx, my, placement.TileId, ctx.CurrentLayer);
+            painted = true;
+        }
+
+        if (painted)
+            ctx.RequestRepaint?.Invoke();
     }
 
     internal static bool InMap(TilemapEditorContext ctx, int tx, int ty) =>

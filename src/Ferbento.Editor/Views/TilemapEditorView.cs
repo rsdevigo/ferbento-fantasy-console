@@ -32,6 +32,11 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
     private int _panLastX;
     private int _panLastY;
     private KeyModifiers _keyModifiers;
+    private double _hostWidth = 512;
+    private double _hostHeight = 384;
+    private int _bitmapWidth;
+    private int _bitmapHeight;
+    private MapEditorViewport _lastViewport;
 
     public TilemapEditorController Controller => _ctrl;
 
@@ -45,8 +50,12 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
         Content = _chrome;
         Focusable = true;
 
-        _ctrl.Edited += () => _onEdited?.Invoke();
-        _ctrl.RefreshRequested += RefreshAll;
+        _ctrl.Edited += () =>
+        {
+            _onEdited?.Invoke();
+            RebuildMapBitmap();
+        };
+        _ctrl.RefreshRequested += RebuildMapBitmap;
 
         _ctrl.Viewport.PropertyChanged += (_, e) =>
         {
@@ -63,19 +72,28 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
                 or nameof(TilemapEditorController.SelectedTile)
                 or nameof(TilemapEditorController.CurrentLayer)
                 or nameof(TilemapEditorController.SpriteBankCount)
-                or nameof(TilemapEditorController.StatusText))
+                or nameof(TilemapEditorController.StatusText)
+                or nameof(TilemapEditorController.HasClipboard))
             {
                 UpdateUi();
             }
         };
 
         EditorKeyboardRouting.Attach(this, OnKeyDown, OnKeyUp, OnTextInput);
-        Loaded += (_, _) =>
-        {
-            RebuildMapBitmap();
-            RefreshNavigator();
-            Focus();
-        };
+        Loaded += OnViewLoaded;
+    }
+
+    private void OnViewLoaded(object? sender, RoutedEventArgs e) => SyncHostSizeAndRebuild();
+
+    private void SyncHostSizeAndRebuild()
+    {
+        _hostWidth = Math.Max(1, _chrome.PrimaryHost.Bounds.Width);
+        _hostHeight = Math.Max(1, _chrome.PrimaryHost.Bounds.Height);
+        _ctrl.SetPanelSize(_hostWidth, _hostHeight);
+        _chrome.ToolStrip.SetToolEnabled("stamp", _ctrl.HasClipboard);
+        RebuildMapBitmap();
+        RefreshNavigator();
+        Focus();
     }
 
     private void BuildChrome()
@@ -85,19 +103,28 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
             Stretch = Stretch.None,
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Top,
+            IsHitTestVisible = false,
         };
-        _mapImage.PointerPressed += OnMapPressed;
-        _mapImage.PointerMoved += OnMapMoved;
-        _mapImage.PointerReleased += OnMapReleased;
-        _mapImage.PointerWheelChanged += OnMapWheel;
-        _mapImage.PointerExited += (_, _) => _ctrl.ClearHoverTile();
+
+        _chrome.PrimaryHost.PointerPressed += OnMapPressed;
+        _chrome.PrimaryHost.PointerMoved += OnMapMoved;
+        _chrome.PrimaryHost.PointerReleased += OnMapReleased;
+        _chrome.PrimaryHost.PointerWheelChanged += OnMapWheel;
+        _chrome.PrimaryHost.PointerExited += (_, _) => _ctrl.ClearHoverTile();
 
         _chrome.PrimaryHost.Child = _mapImage;
-        _chrome.PrimaryHost.PanelSizeChanged += (w, h) => _ctrl.SetPanelSize(w, h);
+        _chrome.PrimaryHost.PanelSizeChanged += (w, h) =>
+        {
+            _hostWidth = Math.Max(1, w);
+            _hostHeight = Math.Max(1, h);
+            _ctrl.SetPanelSize(_hostWidth, _hostHeight);
+            RebuildMapBitmap();
+        };
 
         _chrome.ToolStrip.SetTools(
         [
             ("pencil", null, Sprites.SpriteToolIcons.CreateBrushIcon),
+            ("eraser", null, Sprites.SpriteToolIcons.CreateEraserIcon),
             ("fill", "🪣", null),
             ("select", "⬚", null),
             ("stamp", "📌", null),
@@ -133,6 +160,18 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
         redoBtn.Click += (_, _) => { _ctrl.HandleKey("Y", true, false, false); RefreshAll(); };
         _chrome.ContextStrip.Children.Add(undoBtn);
         _chrome.ContextStrip.Children.Add(redoBtn);
+        HighlightLayerButtons();
+    }
+
+    private void HighlightLayerButtons()
+    {
+        foreach (var child in _chrome.ContextStrip.Children)
+        {
+            if (child is not Button btn || btn.Tag is not int layer) continue;
+            btn.Background = layer == _ctrl.CurrentLayer
+                ? new SolidColorBrush(EditorTheme.ToolActive)
+                : Brushes.Transparent;
+        }
     }
 
     public void SetProfile(HardwareProfile profile)
@@ -160,7 +199,9 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
     private void UpdateUi()
     {
         _chrome.ToolStrip.HighlightTool(_ctrl.SelectedTool);
+        _chrome.ToolStrip.SetToolEnabled("stamp", _ctrl.HasClipboard);
         _chrome.StatusFooter.Text = _ctrl.StatusText;
+        HighlightLayerButtons();
         RefreshNavigator();
         RebuildMapBitmap();
     }
@@ -174,7 +215,7 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
         return MapEditorViewport.Compute(
             _ctrl.MapWidth, _ctrl.MapHeight, tile, zoom,
             _ctrl.Viewport.PanX, _ctrl.Viewport.PanY,
-            _chrome.PrimaryHost.Bounds.Width, _chrome.PrimaryHost.Bounds.Height);
+            _hostWidth, _hostHeight);
     }
 
     private void RebuildMapBitmap()
@@ -186,58 +227,150 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
 
         if (vp.BitmapWidth <= 0 || vp.BitmapHeight <= 0) return;
 
-        _mapBitmap?.Dispose();
+        var previous = _mapBitmap;
         _mapBitmap = new WriteableBitmap(
             new PixelSize(vp.BitmapWidth, vp.BitmapHeight),
             new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
 
-        using var locked = _mapBitmap.Lock();
-        ClearBitmap(locked.Address, locked.RowBytes, vp.BitmapWidth, vp.BitmapHeight, 0xFF3F3F46);
-
-        for (var vty = 0; vty < vp.TilesHigh; vty++)
-        for (var vtx = 0; vtx < vp.TilesWide; vtx++)
+        using (var locked = _mapBitmap.Lock())
         {
-            var mapX = vp.StartMapX + vtx;
-            var mapY = vp.StartMapY + vty;
-            if (mapX >= _ctrl.MapWidth || mapY >= _ctrl.MapHeight) continue;
-            DrawMapTile(locked.Address, locked.RowBytes, vp, mapX, mapY, tile, zoom);
+            ClearBitmap(locked.Address, locked.RowBytes, vp.BitmapWidth, vp.BitmapHeight, 0xFF3F3F46);
+
+            for (var vty = 0; vty < vp.TilesHigh; vty++)
+            for (var vtx = 0; vtx < vp.TilesWide; vtx++)
+            {
+                var mapX = vp.StartMapX + vtx;
+                var mapY = vp.StartMapY + vty;
+                if (mapX >= _ctrl.MapWidth || mapY >= _ctrl.MapHeight) continue;
+                DrawMapTile(locked.Address, locked.RowBytes, vp, mapX, mapY, tile, zoom);
+            }
+
+            if (_ctrl.Selection.MapRect is { } sel)
+                DrawSelection(locked.Address, locked.RowBytes, sel, vp);
+
+            if (_ctrl.HasHoverTile && _ctrl.SelectedTool == "stamp" && _ctrl.HasClipboard)
+                DrawStampPreview(locked.Address, locked.RowBytes, _ctrl.HoverMapX, _ctrl.HoverMapY, vp, tile, zoom);
+            else if (_ctrl.HasHoverTile && _ctrl.SelectedTool is "pencil" or "fill" or "eraser")
+                DrawPaintPreview(locked.Address, locked.RowBytes, _ctrl.HoverMapX, _ctrl.HoverMapY, vp, tile, zoom);
         }
-
-        if (_ctrl.Selection.MapRect is { } sel)
-            DrawSelection(locked.Address, locked.RowBytes, sel, vp);
-
-        if (_ctrl.HasHoverTile && _ctrl.SelectedTool is "pencil" or "fill" or "stamp")
-            DrawPaintPreview(locked.Address, locked.RowBytes, _ctrl.HoverMapX, _ctrl.HoverMapY, vp, tile, zoom);
 
         _mapImage.Source = _mapBitmap;
         _mapImage.Width = vp.BitmapWidth;
         _mapImage.Height = vp.BitmapHeight;
+        _bitmapWidth = vp.BitmapWidth;
+        _bitmapHeight = vp.BitmapHeight;
+        _lastViewport = vp;
+        previous?.Dispose();
     }
 
     private void DrawPaintPreview(nint ptr, int stride, int mapX, int mapY, MapEditorViewport vp, int tile, int zoom)
     {
         if (mapX < 0 || mapY < 0 || mapX >= _ctrl.MapWidth || mapY >= _ctrl.MapHeight) return;
         if (!vp.IsOnBitmap(mapX, mapY)) return;
-
-        var (tileScreenX, tileScreenY) = TileScreenOrigin(vp, mapX, mapY);
-        DrawTileOutlineScreen(ptr, stride, tileScreenX, tileScreenY, tile, zoom, vp.BitmapWidth, vp.BitmapHeight, 0xFFFFFF00u);
-
         if (_bus == null) return;
-        var tileId = _ctrl.SelectedTile;
-        var col = tileId % _ctrl.SpritesPerRow;
-        var row = tileId / _ctrl.SpritesPerRow;
-        var sx = col * tile;
-        var sy = row * tile;
-        var transparent = _ctrl.ColorChip?.TransparentIndex ?? 0;
 
-        for (var py = 0; py < tile; py++)
-        for (var px = 0; px < tile; px++)
+        var outlineColor = _ctrl.SelectedTool == "eraser" ? 0xFFFF6666u : 0xFFFFFF00u;
+        var transparent = _ctrl.ColorChip?.TransparentIndex ?? 0;
+        var placements = TileStampLayout.GetPlacements(
+            _ctrl.SelectedTile,
+            _ctrl.Selection.NavigatorSprites,
+            _ctrl.SpritesPerRow);
+
+        foreach (var placement in placements)
         {
-            var ci = _bus.Sprite.SGet(sx + px, sy + py);
-            if (ci == transparent) continue;
-            var bgra = Pico8Colors.ToBgra(ci, _ctrl.ColorChip, MapTileRenderColors.Checkerboard(mapX, mapY));
-            var ghost = (bgra & 0x00FFFFFFu) | 0x88000000u;
-            BlendBlockScreen(ptr, stride, tileScreenX + px * zoom, tileScreenY + py * zoom, zoom, vp.BitmapWidth, vp.BitmapHeight, ghost);
+            var mx = mapX + placement.Dx;
+            var my = mapY + placement.Dy;
+            if (mx < 0 || my < 0 || mx >= _ctrl.MapWidth || my >= _ctrl.MapHeight) continue;
+            if (!vp.IsOnBitmap(mx, my)) continue;
+
+            var (tileScreenX, tileScreenY) = TileScreenOrigin(vp, mx, my);
+            DrawTileOutlineScreen(ptr, stride, tileScreenX, tileScreenY, tile, zoom, vp.BitmapWidth, vp.BitmapHeight, outlineColor);
+
+            if (_ctrl.SelectedTool == "eraser") continue;
+
+            var tileId = placement.TileId;
+            var col = tileId % _ctrl.SpritesPerRow;
+            var row = tileId / _ctrl.SpritesPerRow;
+            var sx = col * tile;
+            var sy = row * tile;
+
+            for (var py = 0; py < tile; py++)
+            for (var px = 0; px < tile; px++)
+            {
+                var ci = _bus.Sprite.SGet(sx + px, sy + py);
+                if (ci == transparent) continue;
+                var bgra = Pico8Colors.ToBgra(ci, _ctrl.ColorChip, MapTileRenderColors.Checkerboard(mx, my));
+                var ghost = (bgra & 0x00FFFFFFu) | 0x88000000u;
+                BlendBlockScreen(ptr, stride, tileScreenX + px * zoom, tileScreenY + py * zoom, zoom, vp.BitmapWidth, vp.BitmapHeight, ghost);
+            }
+        }
+    }
+
+    private void DrawStampPreview(nint ptr, int stride, int anchorX, int anchorY, MapEditorViewport vp, int tile, int zoom)
+    {
+        if (_bus == null || !_ctrl.Clipboard.HasData || _ctrl.Clipboard.Data == null) return;
+
+        var data = _ctrl.Clipboard.Data;
+        var placed = _ctrl.Clipboard.Placed;
+        var clipW = _ctrl.Clipboard.Width;
+        var clipH = _ctrl.Clipboard.Height;
+        var transparent = _ctrl.ColorChip?.TransparentIndex ?? 0;
+        const uint tileOutline = 0xFF66CCFFu;
+
+        for (var dy = 0; dy < clipH; dy++)
+        for (var dx = 0; dx < clipW; dx++)
+        {
+            var mx = anchorX + dx;
+            var my = anchorY + dy;
+            if (mx < 0 || my < 0 || mx >= _ctrl.MapWidth || my >= _ctrl.MapHeight) continue;
+            if (!vp.IsOnBitmap(mx, my)) continue;
+
+            var idx = dy * clipW + dx;
+            var tileId = data[idx];
+            var isPlaced = placed![idx];
+            var (tileScreenX, tileScreenY) = TileScreenOrigin(vp, mx, my);
+            DrawTileOutlineScreen(ptr, stride, tileScreenX, tileScreenY, tile, zoom, vp.BitmapWidth, vp.BitmapHeight, tileOutline);
+
+            if (tileId == 0 && !isPlaced) continue;
+
+            var col = tileId % _ctrl.SpritesPerRow;
+            var row = tileId / _ctrl.SpritesPerRow;
+            var sx = col * tile;
+            var sy = row * tile;
+
+            for (var py = 0; py < tile; py++)
+            for (var px = 0; px < tile; px++)
+            {
+                var ci = _bus.Sprite.SGet(sx + px, sy + py);
+                if (ci == transparent) continue;
+                var bgra = Pico8Colors.ToBgra(ci, _ctrl.ColorChip, MapTileRenderColors.Checkerboard(mx, my));
+                var ghost = (bgra & 0x00FFFFFFu) | 0xA0000000u;
+                BlendBlockScreen(ptr, stride, tileScreenX + px * zoom, tileScreenY + py * zoom, zoom, vp.BitmapWidth, vp.BitmapHeight, ghost);
+            }
+        }
+
+        DrawStampBoundsOutline(ptr, stride, anchorX, anchorY, clipW, clipH, vp, tile, zoom, 0xFFFFCC00u);
+    }
+
+    private static void DrawStampBoundsOutline(
+        nint ptr, int stride, int anchorX, int anchorY, int clipW, int clipH,
+        MapEditorViewport vp, int tile, int zoom, uint color)
+    {
+        var maxW = vp.BitmapWidth;
+        var maxH = vp.BitmapHeight;
+        var left = (anchorX - vp.StartMapX) * vp.CellPixels - vp.SubPixelOffsetX;
+        var top = (anchorY - vp.StartMapY) * vp.CellPixels - vp.SubPixelOffsetY;
+        var right = left + clipW * tile * zoom;
+        var bottom = top + clipH * tile * zoom;
+        for (var x = left; x < right; x++)
+        {
+            PutPixel(ptr, stride, x, top, maxW, maxH, color);
+            PutPixel(ptr, stride, x, bottom - 1, maxW, maxH, color);
+        }
+        for (var y = top; y < bottom; y++)
+        {
+            PutPixel(ptr, stride, left, y, maxW, maxH, color);
+            PutPixel(ptr, stride, right - 1, y, maxW, maxH, color);
         }
     }
 
@@ -306,7 +439,8 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
         var tileId = _bus!.Tilemap.MGet(mapX, mapY);
         var maxW = vp.BitmapWidth;
         var maxH = vp.BitmapHeight;
-        if (tileId == 0)
+
+        if (tileId == 0 && !_ctrl.Document.IsCellPlaced(mapX, mapY))
         {
             var bg = MapTileRenderColors.Checkerboard(mapX, mapY);
             FillBlockScreen(ptr, stride, tileScreenX, tileScreenY, zoom, tile, maxW, maxH, bg);
@@ -328,6 +462,8 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
         }
         if (_ctrl.Viewport.HexView)
             DrawHexDigit(ptr, stride, tileScreenX, tileScreenY, maxW, maxH, tileId);
+        else if (MapTileRenderColors.SpriteTileIsEmpty(_bus, tileId, tile, _ctrl.SpritesPerRow, _ctrl.ColorChip?.TransparentIndex ?? 0))
+            DrawTileOutlineScreen(ptr, stride, tileScreenX, tileScreenY, tile, zoom, maxW, maxH, 0x884488FFu);
     }
 
     private static void DrawHexDigit(nint ptr, int stride, int px, int py, int maxW, int maxH, int value)
@@ -336,7 +472,7 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
         {
             PutPixel(ptr, stride, px, py, maxW, maxH, 0xFFCCCCCC);
             if (px + 4 < maxW)
-                PutPixel(ptr, stride, px + 4, py, maxW, maxH, (uint)(0xFF000000 | ((value & 0xF0) << 16) | ((value & 0x0F) << 8)));
+                PutPixel(ptr, stride, px + 4, py, maxW, maxH, (uint)(0xFF000000u | (uint)((value & 0xF0) << 16) | (uint)((value & 0x0F) << 8)));
         }
     }
 
@@ -386,43 +522,53 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
 
     private (int mapX, int mapY) MapCoords(PointerEventArgs e)
     {
+        if (_bitmapWidth <= 0 || _bitmapHeight <= 0)
+            return (-1, -1);
+
         var pt = e.GetPosition(_mapImage);
-        return CurrentViewport().PointerToMapTile(pt.X, pt.Y);
+        if (pt.X < 0 || pt.Y < 0 || pt.X >= _bitmapWidth || pt.Y >= _bitmapHeight)
+            return (-1, -1);
+
+        return _lastViewport.PointerToMapTile(pt.X, pt.Y);
     }
 
-    private void UpdateHoverFromPointer(PointerEventArgs e)
+    private bool TryMapCoords(PointerEventArgs e, out int mapX, out int mapY)
     {
-        var (mapX, mapY) = MapCoords(e);
-        if (mapX >= 0 && mapX < _ctrl.MapWidth && mapY >= 0 && mapY < _ctrl.MapHeight)
-            _ctrl.SetHoverTile(mapX, mapY);
-        else
-            _ctrl.ClearHoverTile();
+        (mapX, mapY) = MapCoords(e);
+        return mapX >= 0 && mapX < _ctrl.MapWidth && mapY >= 0 && mapY < _ctrl.MapHeight;
     }
 
     private void OnMapPressed(object? sender, PointerPressedEventArgs e)
     {
+        if (!TryMapCoords(e, out var tx, out var ty)) return;
+
         Focus();
-        UpdateHoverFromPointer(e);
-        var (tx, ty) = MapCoords(e);
+        e.Pointer.Capture(_chrome.PrimaryHost);
+        _ctrl.SetHoverTile(tx, ty);
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
 
-        if (_ctrl.SelectedTool == "pan" || _keyModifiers.HasFlag(KeyModifiers.Shift) && _ctrl.SelectedTool != "select")
+        if (_ctrl.SelectedTool == "pan" || _ctrl.IsSpaceHeld)
         {
             _panDragging = true;
             _panLastX = (int)e.GetPosition(_mapImage).X;
             _panLastY = (int)e.GetPosition(_mapImage).Y;
+            e.Handled = true;
             return;
         }
 
         _isPainting = true;
         _ctrl.HandlePointerDown(tx, ty, ctrl, shift, e.GetCurrentPoint(_mapImage).Properties.IsRightButtonPressed);
         RebuildMapBitmap();
+        e.Handled = true;
     }
 
     private void OnMapMoved(object? sender, PointerEventArgs e)
     {
-        UpdateHoverFromPointer(e);
+        if (TryMapCoords(e, out var mapX, out var mapY))
+            _ctrl.SetHoverTile(mapX, mapY);
+        else
+            _ctrl.ClearHoverTile();
 
         if (_panDragging)
         {
@@ -431,23 +577,35 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
             _panLastX = (int)pt.X;
             _panLastY = (int)pt.Y;
             RebuildMapBitmap();
+            e.Handled = true;
             return;
         }
 
         if (!_isPainting) return;
-        var (mapX, mapY) = MapCoords(e);
+        if (!TryMapCoords(e, out mapX, out mapY)) return;
         _ctrl.HandlePointerMove(mapX, mapY, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
         RebuildMapBitmap();
+        e.Handled = true;
     }
 
     private void OnMapReleased(object? sender, PointerReleasedEventArgs e)
     {
-        if (_panDragging) { _panDragging = false; return; }
+        e.Pointer.Capture(null);
+        if (_panDragging)
+        {
+            _panDragging = false;
+            e.Handled = true;
+            return;
+        }
+
         if (!_isPainting) return;
-        var (tx, ty) = MapCoords(e);
-        _ctrl.HandlePointerUp(tx, ty, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+        if (TryMapCoords(e, out var tx, out var ty))
+            _ctrl.HandlePointerUp(tx, ty, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+        else
+            _ctrl.HandlePointerUp(-1, -1, false, false);
         _isPainting = false;
         RebuildMapBitmap();
+        e.Handled = true;
     }
 
     private void OnMapWheel(object? sender, PointerWheelEventArgs e)
@@ -475,7 +633,6 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
         _keyModifiers = e.KeyModifiers;
-        if (e.Key == Key.Space) _ctrl.SetSpaceHeld(true);
 
         var key = e.Key.ToString();
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
@@ -511,7 +668,7 @@ public class TilemapEditorView : UserControl, IProfileAwareEditor
     private void OnKeyUp(object? sender, KeyEventArgs e)
     {
         _keyModifiers = e.KeyModifiers;
-        if (e.Key == Key.Space) _ctrl.SetSpaceHeld(false);
+        _ctrl.HandleKeyUp(e.Key.ToString());
     }
 
     private void OnTextInput(object? sender, TextInputEventArgs e)

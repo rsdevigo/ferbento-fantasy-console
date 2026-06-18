@@ -16,6 +16,7 @@ public sealed class TilemapEditorContext
     public MapStrokeCommand? ActiveStroke { get; set; }
     public (int x, int y)? DragStart { get; set; }
     public Action? NotifyEdited { get; set; }
+    public Action? RequestRepaint { get; set; }
 
     public void BeginStroke(int x, int y) =>
         ActiveStroke = new MapStrokeCommand(Document, CurrentLayer, x, y);

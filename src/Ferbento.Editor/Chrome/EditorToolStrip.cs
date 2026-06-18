@@ -9,6 +9,9 @@ namespace Ferbento.Editor.Chrome;
 
 public sealed class EditorToolStrip : WrapPanel
 {
+    private readonly Dictionary<string, bool> _toolEnabled = new();
+    private string? _selectedId;
+
     public event Action<string>? ToolSelected;
 
     public EditorToolStrip()
@@ -46,21 +49,48 @@ public sealed class EditorToolStrip : WrapPanel
                 Cursor = new Cursor(StandardCursorType.Hand),
             };
             ToolTip.SetTip(btn, id);
+            _toolEnabled[toolId] = true;
             btn.PointerPressed += (_, e) =>
             {
+                if (!_toolEnabled.GetValueOrDefault(toolId, true)) return;
                 ToolSelected?.Invoke(toolId);
                 e.Handled = true;
             };
             Children.Add(btn);
         }
+        _selectedId = selectedId;
+    }
+
+    public void SetToolEnabled(string id, bool enabled)
+    {
+        _toolEnabled[id] = enabled;
+        ApplyToolChrome(id);
     }
 
     public void HighlightTool(string? selectedId)
     {
+        _selectedId = selectedId;
         foreach (var child in Children)
         {
-            if (child is Border b && b.Tag is string id)
-                b.Background = new SolidColorBrush(id == selectedId ? EditorTheme.ToolActive : EditorTheme.ToolInactive);
+            if (child is Border b && b.Tag is string toolId)
+                ApplyToolChrome(toolId);
+        }
+    }
+
+    private void ApplyToolChrome(string id)
+    {
+        foreach (var child in Children)
+        {
+            if (child is not Border b || b.Tag is not string toolId || toolId != id) continue;
+
+            var enabled = _toolEnabled.GetValueOrDefault(id, true);
+            var selected = id == _selectedId;
+            b.IsHitTestVisible = enabled;
+            b.Opacity = enabled ? 1.0 : 0.4;
+            b.Cursor = enabled ? new Cursor(StandardCursorType.Hand) : new Cursor(StandardCursorType.Arrow);
+            b.Background = new SolidColorBrush(
+                selected && enabled ? EditorTheme.ToolActive : EditorTheme.ToolInactive);
+            return;
         }
     }
 }

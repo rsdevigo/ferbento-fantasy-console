@@ -6,7 +6,7 @@ public enum TilemapEditorAction
     PrevTile, NextTile,
     ZoomIn, ZoomOut, ToggleHexView,
     SelectTool, ClearSelection, SelectAllMap,
-    ToolPencil, ToolFill, ToolSelect, ToolStamp, ToolPan, ToolShape,
+    ToolPencil, ToolFill, ToolEraser, ToolSelect, ToolStamp, ToolPan, ToolShape,
 }
 
 public static class TilemapEditorInputMap
@@ -28,6 +28,7 @@ public static class TilemapEditorInputMap
         [TilemapEditorAction.SelectAllMap] = "Ctrl+A",
         [TilemapEditorAction.ToolPencil] = "B",
         [TilemapEditorAction.ToolFill] = "G",
+        [TilemapEditorAction.ToolEraser] = "E",
         [TilemapEditorAction.ToolSelect] = "Shift",
         [TilemapEditorAction.ToolStamp] = "T",
         [TilemapEditorAction.ToolPan] = "Space",
@@ -37,6 +38,7 @@ public static class TilemapEditorInputMap
     public static string GetTooltip(string toolId) => toolId switch
     {
         "pencil" => "Paint (B)",
+        "eraser" => "Eraser (E)",
         "fill" => "Fill (G)",
         "select" => "Select (S / Shift)",
         "stamp" => "Stamp (T)",
