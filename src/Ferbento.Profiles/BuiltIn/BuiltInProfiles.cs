@@ -31,6 +31,7 @@ public static class BuiltInProfiles
             Colors = 16,
             TransparentIndex = 0,
             DefaultColors = PaletteDefaults.Pico8Hex,
+            AllowColorEdit = true,
         },
         Sprites = new SpriteSpec { SheetWidth = 128, SheetHeight = 128, TileSize = 8, MaxOnScreen = 128 },
         Map = new MapSpec { Width = 128, Height = 64, TileSize = 8 },

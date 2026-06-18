@@ -10,6 +10,14 @@ public static class PaletteDefaults
         "29ADFF", "83769C", "FF77A8", "FFCCAA"
     ];
 
+    public static readonly string[] Pico8Names =
+    [
+        "black", "dark-blue", "dark-purple", "dark-green",
+        "brown", "dark-grey", "light-grey", "white",
+        "red", "orange", "yellow", "green",
+        "blue", "indigo", "pink", "peach"
+    ];
+
     public static readonly string[] GameBoyHex =
     [
         "0F380F", "306230", "8BAC0F", "9BBC0F"
@@ -27,6 +35,17 @@ public static class PaletteDefaults
             return GenerateGbcDefaults(colorCount);
 
         return GenerateRamp(colorCount);
+    }
+
+    public static string[] DefaultNamesForProfile(string profileName, int colorCount)
+    {
+        if (profileName.Equals("Pico-8", StringComparison.OrdinalIgnoreCase) && colorCount <= Pico8Names.Length)
+            return Pico8Names.Take(colorCount).ToArray();
+
+        var result = new string[colorCount];
+        for (var i = 0; i < colorCount; i++)
+            result[i] = $"color-{i}";
+        return result;
     }
 
     private static string[] GenerateGbcDefaults(int count)

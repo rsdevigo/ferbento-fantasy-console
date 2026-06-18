@@ -7,6 +7,8 @@ namespace Ferbento.Core.Chips;
 public sealed class ColorChip : IChip
 {
     public const int PalettePersistMagic = 0x50414C00; // "PAL\0"
+    public const byte PaletteNamesMarker = 0x4E; // 'N'
+    public const int MaxColorNameLength = 32;
 
     public string Name => "Color";
 
@@ -20,6 +22,8 @@ public sealed class ColorChip : IChip
 
     private ChipBus _bus = null!;
     private uint[] _colors = [];
+    private string[] _names = [];
+    private string _profileName = "Pico-8";
 
     public int ColorCount { get; private set; } = 16;
     public int TransparentIndex { get; private set; }
@@ -28,6 +32,7 @@ public sealed class ColorChip : IChip
 
     public void Configure(HardwareProfile profile)
     {
+        _profileName = profile.Name;
         ColorCount = profile.Palette.Colors;
         TransparentIndex = profile.Palette.TransparentIndex;
 
@@ -43,6 +48,8 @@ public sealed class ColorChip : IChip
                 expanded[i] = (uint)(i * 255 / System.Math.Max(1, ColorCount - 1)) * 0x010101;
             _colors = expanded;
         }
+
+        ResetNamesToProfileDefaults();
     }
 
     public void Initialize(ChipBus bus)
@@ -55,6 +62,7 @@ public sealed class ColorChip : IChip
     {
         for (var i = 0; i < _colors.Length; i++)
             _colors[i] = i < Pico8Palette.Length ? Pico8Palette[i] : (uint)i * 0x010101;
+        ResetNamesToProfileDefaults();
         PersistToMemory();
     }
 
@@ -67,10 +75,24 @@ public sealed class ColorChip : IChip
         return _colors[index];
     }
 
+    public string GetColorName(int index)
+    {
+        if (_names.Length == 0) return $"color-{index}";
+        index = System.Math.Clamp(index, 0, _names.Length - 1);
+        return _names[index];
+    }
+
     public void SetColor(int index, uint rgb)
     {
         if (index < 0 || index >= _colors.Length) return;
         _colors[index] = rgb & 0xFFFFFF;
+        PersistToMemory();
+    }
+
+    public void SetColorName(int index, string name)
+    {
+        if (index < 0 || index >= _names.Length) return;
+        _names[index] = SanitizeName(name);
         PersistToMemory();
     }
 
@@ -84,16 +106,49 @@ public sealed class ColorChip : IChip
     {
         for (var i = 0; i < _colors.Length; i++)
             _colors[i] = i < Pico8Palette.Length ? Pico8Palette[i] : 0;
+        ResetNamesToPico8Canonical();
         PersistToMemory();
     }
 
     public void LoadFromMemory() => TryLoadFromMemory();
 
+    private void ResetNamesToProfileDefaults()
+    {
+        _names = PaletteDefaults.DefaultNamesForProfile(_profileName, ColorCount);
+    }
+
+    private void ResetNamesToPico8Canonical()
+    {
+        EnsureNamesArray();
+        for (var i = 0; i < _names.Length; i++)
+        {
+            _names[i] = i < PaletteDefaults.Pico8Names.Length
+                ? PaletteDefaults.Pico8Names[i]
+                : $"color-{i}";
+        }
+    }
+
+    private void EnsureNamesArray()
+    {
+        if (_names.Length == ColorCount) return;
+        var defaults = PaletteDefaults.DefaultNamesForProfile(_profileName, ColorCount);
+        _names = defaults;
+    }
+
+    private static string SanitizeName(string name)
+    {
+        name = name.Trim();
+        if (name.Length == 0) return "unnamed";
+        return name.Length <= MaxColorNameLength ? name : name[..MaxColorNameLength];
+    }
+
     private bool CanPersistInMemory()
     {
-        var required = MemoryMap.UserDataStart + 6 + _colors.Length * 3;
+        var required = NamesPersistOffset() + 1 + _colors.Length * (1 + MaxColorNameLength);
         return required <= _bus.Memory.Memory.Size;
     }
+
+    private int NamesPersistOffset() => MemoryMap.UserDataStart + 6 + _colors.Length * 3;
 
     private void TryLoadFromMemory()
     {
@@ -114,6 +169,35 @@ public sealed class ColorChip : IChip
             var b = mem.Peek(offset++);
             _colors[i] = (uint)(r << 16 | g << 8 | b);
         }
+
+        TryLoadNamesFromMemory(offset);
+    }
+
+    private void TryLoadNamesFromMemory(int offset)
+    {
+        var mem = _bus.Memory.Memory;
+        if (offset >= mem.Size || mem.Peek(offset) != PaletteNamesMarker) return;
+
+        offset++;
+        EnsureNamesArray();
+
+        for (var i = 0; i < _names.Length && offset < mem.Size; i++)
+        {
+            var rawLen = mem.Peek(offset++);
+            if (rawLen == 0)
+            {
+                _names[i] = PaletteDefaults.DefaultNamesForProfile(_profileName, ColorCount)[i];
+                continue;
+            }
+
+            var nameLen = System.Math.Min((int)rawLen, MaxColorNameLength);
+            if (offset + nameLen > mem.Size) break;
+
+            var chars = new char[nameLen];
+            for (var c = 0; c < nameLen; c++)
+                chars[c] = (char)mem.Peek(offset++);
+            _names[i] = SanitizeName(new string(chars));
+        }
     }
 
     private void PersistToMemory()
@@ -130,6 +214,17 @@ public sealed class ColorChip : IChip
             mem.Poke(offset++, (byte)((rgb >> 16) & 0xFF));
             mem.Poke(offset++, (byte)((rgb >> 8) & 0xFF));
             mem.Poke(offset++, (byte)(rgb & 0xFF));
+        }
+
+        EnsureNamesArray();
+        mem.Poke(offset++, PaletteNamesMarker);
+        foreach (var name in _names)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(SanitizeName(name));
+            var len = System.Math.Min(bytes.Length, MaxColorNameLength);
+            mem.Poke(offset++, (byte)len);
+            for (var i = 0; i < len; i++)
+                mem.Poke(offset++, bytes[i]);
         }
     }
 }

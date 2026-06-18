@@ -53,6 +53,10 @@ public static class Pico8Colors
         return $"#{(rgb & 0xFFFFFF):X6}";
     }
 
-    public static string ColorName(int index) =>
-        index >= 0 && index < Names.Length ? Names[index] : $"color-{index}";
+    public static string ColorName(int index, ColorChip? colorChip = null)
+    {
+        if (colorChip != null && index >= 0 && index < colorChip.ColorCount)
+            return colorChip.GetColorName(index);
+        return index >= 0 && index < Names.Length ? Names[index] : $"color-{index}";
+    }
 }

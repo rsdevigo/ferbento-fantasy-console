@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Ferbento.Core.Chips;
@@ -11,39 +12,24 @@ namespace Ferbento.Editor.Views;
 public class PaletteEditorView : UserControl, IProfileAwareEditor
 {
     private readonly PaletteEditorViewModel _vm = new();
-    private readonly StackPanel _swatchRow = new() { Margin = new Thickness(12, 8) };
-    private readonly StackPanel _drawRemapPanel = new();
-    private readonly StackPanel _screenRemapPanel = new();
-    private readonly StackPanel _transparencyPanel = new();
-    private TextBlock _colorNameBlock = null!;
-    private TextBlock _colorHexBlock = null!;
-    private TextBlock _colorRgbBlock = null!;
-    private TextBlock _colorIndexBlock = null!;
-    private TextBox _hexInput = null!;
-    private NumericUpDown _rInput = null!;
-    private NumericUpDown _gInput = null!;
-    private NumericUpDown _bInput = null!;
+    private readonly StackPanel _swatchListPanel = new() { Spacing = 2 };
+    private readonly TextBlock _headerBlock = new();
+    private readonly TextBlock _disabledLabel = new();
+    private readonly Border _currentPreview = new();
+    private readonly Border _newPreview = new();
+    private readonly ColorView _colorView = new() { IsAlphaEnabled = false };
+    private readonly TextBox _hexInput = new();
+    private readonly TextBox _nameInput = new();
+    private readonly CheckBox _transpCheck = new();
+    private readonly Button _confirmBtn = new() { Content = "Confirm", Padding = new Thickness(12, 4) };
+    private bool _syncingPicker;
 
     public PaletteEditorView()
     {
         DataContext = _vm;
         Content = BuildLayout();
-        _vm.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName is nameof(PaletteEditorViewModel.SelectedIndex)
-                or nameof(PaletteEditorViewModel.ColorCount))
-            {
-                if (e.PropertyName == nameof(PaletteEditorViewModel.ColorCount))
-                    RebuildDynamicControls();
-                UpdateDetailPanel();
-                UpdateSwatchHighlight();
-            }
-        };
-        _vm.PaletteChanged += () =>
-        {
-            RefreshSwatchColors();
-            UpdateDetailPanel();
-        };
+        _vm.PropertyChanged += OnViewModelPropertyChanged;
+        _vm.PaletteChanged += OnPaletteChanged;
     }
 
     public void SetProfile(HardwareProfile profile) => _vm.SetProfile(profile);
@@ -59,7 +45,8 @@ public class PaletteEditorView : UserControl, IProfileAwareEditor
     public void SetChipBus(ChipBus bus)
     {
         _vm.SetChipBus(bus);
-        RebuildDynamicControls();
+        RebuildSwatchList();
+        RefreshAll();
     }
 
     public void RefreshFromBus()
@@ -68,218 +55,335 @@ public class PaletteEditorView : UserControl, IProfileAwareEditor
         RefreshAll();
     }
 
+    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(PaletteEditorViewModel.ColorCount):
+                RebuildSwatchList();
+                RefreshAll();
+                break;
+            case nameof(PaletteEditorViewModel.SelectedIndex):
+            case nameof(PaletteEditorViewModel.CommittedHex):
+            case nameof(PaletteEditorViewModel.PendingColor):
+            case nameof(PaletteEditorViewModel.PendingHex):
+            case nameof(PaletteEditorViewModel.PendingName):
+            case nameof(PaletteEditorViewModel.CommittedName):
+            case nameof(PaletteEditorViewModel.HasPendingChange):
+                RefreshPreviewPanel();
+                UpdateSwatchHighlight();
+                break;
+            case nameof(PaletteEditorViewModel.CanEditColors):
+            case nameof(PaletteEditorViewModel.EditStatusText):
+            case nameof(PaletteEditorViewModel.ProfileName):
+                UpdateHeader();
+                UpdateEditEnabled();
+                break;
+            case nameof(PaletteEditorViewModel.Transparency):
+                RefreshTransparencyCheck();
+                break;
+        }
+    }
+
+    private void OnPaletteChanged()
+    {
+        RefreshSwatchColors();
+        RefreshSwatchNames();
+        RefreshPreviewPanel();
+    }
+
     private Control BuildLayout()
     {
         var root = new Grid
         {
-            RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
+            RowDefinitions = new RowDefinitions("Auto,*,Auto"),
             Background = new SolidColorBrush(Color.Parse("#1E1E1E")),
         };
+
+        _headerBlock.Foreground = Brushes.LightGray;
+        _headerBlock.FontSize = 12;
+        UpdateHeader();
 
         root.Children.Add(new Border
         {
             Background = new SolidColorBrush(Color.Parse("#2D2D30")),
             Padding = new Thickness(8, 4),
-            Child = new TextBlock
+            Child = _headerBlock,
+        });
+
+        var body = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("200,*,220"),
+            Margin = new Thickness(12, 8),
+        };
+
+        var paletteColumn = new DockPanel { LastChildFill = true };
+        var paletteLabel = MakeSectionLabel("Palette");
+        DockPanel.SetDock(paletteLabel, Dock.Top);
+        paletteColumn.Children.Add(paletteLabel);
+        paletteColumn.Children.Add(new ScrollViewer
+        {
+            Content = _swatchListPanel,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        });
+        Grid.SetColumn(paletteColumn, 0);
+        body.Children.Add(paletteColumn);
+
+        var pickerColumn = new StackPanel { Spacing = 8 };
+        pickerColumn.Children.Add(MakeSectionLabel("Pick color"));
+        _colorView.ColorChanged += (_, e) =>
+        {
+            if (_syncingPicker) return;
+            _vm.OnPickerColorChanged(e.NewColor);
+        };
+        pickerColumn.Children.Add(_colorView);
+        Grid.SetColumn(pickerColumn, 1);
+        body.Children.Add(pickerColumn);
+
+        var previewColumn = new StackPanel { Spacing = 8, Margin = new Thickness(12, 0, 0, 0) };
+        previewColumn.Children.Add(MakeSectionLabel("Current / New"));
+
+        var previewRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 16,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        previewRow.Children.Add(BuildPreviewBlock("Current", _currentPreview));
+        previewRow.Children.Add(BuildPreviewBlock("New", _newPreview));
+        previewColumn.Children.Add(previewRow);
+
+        _hexInput.Width = 120;
+        _hexInput.FontSize = 11;
+        _hexInput.LostFocus += (_, _) => _vm.OnPendingHexChanged(_hexInput.Text ?? "");
+        previewColumn.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children =
             {
-                Text = "Palette Editor — RGB colors, draw/screen palette, transparency",
-                Foreground = Brushes.LightGray,
-                FontSize = 12,
+                new TextBlock { Text = "Hex:", Foreground = Brushes.LightGray, VerticalAlignment = VerticalAlignment.Center },
+                _hexInput,
             },
         });
 
-        _swatchRow.Orientation = Orientation.Horizontal;
-        Grid.SetRow(_swatchRow, 1);
-        root.Children.Add(_swatchRow);
-
-        var mappings = new Grid
+        _nameInput.Width = 160;
+        _nameInput.FontSize = 11;
+        _nameInput.PlaceholderText = "color name";
+        _nameInput.LostFocus += (_, _) => _vm.OnPendingNameChanged(_nameInput.Text ?? "");
+        previewColumn.Children.Add(new StackPanel
         {
-            ColumnDefinitions = new ColumnDefinitions("*,*,*"),
-            Margin = new Thickness(12, 0, 12, 8),
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children =
+            {
+                new TextBlock { Text = "Name:", Foreground = Brushes.LightGray, VerticalAlignment = VerticalAlignment.Center },
+                _nameInput,
+            },
+        });
+
+        _transpCheck.Content = "Transparent?";
+        _transpCheck.Foreground = Brushes.LightGray;
+        _transpCheck.FontSize = 11;
+        _transpCheck.IsCheckedChanged += (_, _) =>
+        {
+            if (_transpCheck.IsChecked.HasValue)
+                _vm.SetTransparency(_vm.SelectedIndex, _transpCheck.IsChecked.Value);
         };
+        previewColumn.Children.Add(_transpCheck);
 
-        mappings.Children.Add(_drawRemapPanel);
-        Grid.SetColumn(_drawRemapPanel, 0);
-        mappings.Children.Add(_screenRemapPanel);
-        Grid.SetColumn(_screenRemapPanel, 1);
-        mappings.Children.Add(_transparencyPanel);
-        Grid.SetColumn(_transparencyPanel, 2);
+        _confirmBtn.Click += (_, _) =>
+        {
+            _vm.CommitPendingColor();
+            RefreshSwatchNames();
+        };
+        previewColumn.Children.Add(_confirmBtn);
 
-        Grid.SetRow(mappings, 2);
-        root.Children.Add(mappings);
+        _disabledLabel.Text = "Color editing is disabled for this profile.";
+        _disabledLabel.Foreground = Brushes.Orange;
+        _disabledLabel.FontSize = 11;
+        _disabledLabel.IsVisible = false;
+        _disabledLabel.TextWrapping = TextWrapping.Wrap;
+        previewColumn.Children.Add(_disabledLabel);
+
+        Grid.SetColumn(previewColumn, 2);
+        body.Children.Add(previewColumn);
+
+        Grid.SetRow(body, 1);
+        root.Children.Add(body);
 
         var footer = new StackPanel
         {
             Background = new SolidColorBrush(Color.Parse("#252526")),
             Margin = new Thickness(12),
-            Spacing = 6,
-        };
-        _colorIndexBlock = new TextBlock
-        {
-            Text = "Index: 0",
-            Foreground = new SolidColorBrush(Color.Parse("#569CD6")),
-            FontSize = 12,
-            FontWeight = FontWeight.Bold,
-        };
-        _colorNameBlock = new TextBlock { Text = "black", Foreground = Brushes.LightGray, FontSize = 11 };
-        _colorHexBlock = new TextBlock { Text = "#000000", Foreground = Brushes.LightGray, FontSize = 11 };
-        _colorRgbBlock = new TextBlock { Text = "RGB(0, 0, 0)", Foreground = Brushes.LightGray, FontSize = 11 };
-
-        var rgbRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        _hexInput = new TextBox { Width = 90, PlaceholderText = "#RRGGBB", FontSize = 11 };
-        _hexInput.LostFocus += (_, _) => _vm.SetColorHex(_vm.SelectedIndex, _hexInput.Text ?? "");
-        _rInput = MakeColorSpinner();
-        _gInput = MakeColorSpinner();
-        _bInput = MakeColorSpinner();
-        void ApplyRgb()
-        {
-            _vm.SetColorRgb(_vm.SelectedIndex,
-                (byte)(int)(_rInput.Value ?? 0),
-                (byte)(int)(_gInput.Value ?? 0),
-                (byte)(int)(_bInput.Value ?? 0));
-            RefreshSwatchColors();
-        }
-        _rInput.ValueChanged += (_, _) => ApplyRgb();
-        _gInput.ValueChanged += (_, _) => ApplyRgb();
-        _bInput.ValueChanged += (_, _) => ApplyRgb();
-        rgbRow.Children.Add(new TextBlock { Text = "RGB:", Foreground = Brushes.LightGray, VerticalAlignment = VerticalAlignment.Center });
-        rgbRow.Children.Add(_hexInput);
-        rgbRow.Children.Add(_rInput);
-        rgbRow.Children.Add(_gInput);
-        rgbRow.Children.Add(_bInput);
-
-        footer.Children.Add(_colorIndexBlock);
-        footer.Children.Add(_colorNameBlock);
-        footer.Children.Add(_colorHexBlock);
-        footer.Children.Add(_colorRgbBlock);
-        footer.Children.Add(rgbRow);
-        footer.Children.Add(new StackPanel
-        {
             Orientation = Orientation.Horizontal,
-            Spacing = 4,
+            Spacing = 8,
             Children =
             {
-                MakeButton("Reset Draw", () => { _vm.ResetDrawPalette(); RefreshRemapControls(); }),
-                MakeButton("Reset Screen", () => { _vm.ResetScreenPalette(); RefreshRemapControls(); }),
-                MakeButton("Reset palt", () => { _vm.ResetTransparency(); RefreshRemapControls(); }),
                 MakeButton("Profile Defaults", () => { _vm.ResetToProfileDefaults(); RefreshAll(); }),
                 MakeButton("Pico-8 Canonical", () => { _vm.ResetToPico8Canonical(); RefreshAll(); }),
             },
-        });
-        Grid.SetRow(footer, 3);
+        };
+        Grid.SetRow(footer, 2);
         root.Children.Add(footer);
 
+        UpdateEditEnabled();
         return root;
     }
 
-    private static NumericUpDown MakeColorSpinner() => new()
+    private static StackPanel BuildPreviewBlock(string label, Border swatch)
     {
-        Width = 56,
-        Minimum = 0,
-        Maximum = 255,
-        FontSize = 11,
-    };
+        swatch.Width = 48;
+        swatch.Height = 48;
+        swatch.BorderBrush = Brushes.Gray;
+        swatch.BorderThickness = new Thickness(1);
 
-    private void RebuildDynamicControls()
+        return new StackPanel
+        {
+            Spacing = 4,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = label,
+                    Foreground = Brushes.LightGray,
+                    FontSize = 11,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                },
+                swatch,
+            },
+        };
+    }
+
+    private void RebuildSwatchList()
     {
-        _swatchRow.Children.Clear();
-        _drawRemapPanel.Children.Clear();
-        _screenRemapPanel.Children.Clear();
-        _transparencyPanel.Children.Clear();
-
+        _swatchListPanel.Children.Clear();
         var count = _vm.ColorCount;
-        var remapCount = Math.Min(count, 16);
-
-        _drawRemapPanel.Children.Add(MakeSectionLabel("Draw Palette (pal c0,c1,0)"));
-        _screenRemapPanel.Children.Add(MakeSectionLabel("Screen Palette (pal c0,c1,1)"));
-        _transparencyPanel.Children.Add(MakeSectionLabel("Transparency (palt)"));
 
         for (var i = 0; i < count; i++)
         {
             var idx = i;
+            var row = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Margin = new Thickness(0, 1),
+                Tag = idx,
+            };
+
             var swatch = new Border
             {
-                Width = Math.Min(70, 280 / Math.Max(1, count)),
-                Height = 50,
+                Width = 18,
+                Height = 18,
                 Background = new SolidColorBrush(Pico8Colors.ToAvaloniaColor(i, _vm.ColorChip)),
                 BorderBrush = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
-                Margin = new Thickness(2),
-                Tag = idx,
-                Child = new TextBlock
-                {
-                    Text = $"{i}",
-                    FontSize = 10,
-                    Foreground = Brushes.White,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    Margin = new Thickness(0, 4, 0, 0),
-                },
+                VerticalAlignment = VerticalAlignment.Center,
             };
-            swatch.PointerPressed += (_, _) =>
-            {
-                _vm.SelectedIndex = idx;
-                UpdateSwatchHighlight();
-            };
-            _swatchRow.Children.Add(swatch);
+            row.Children.Add(swatch);
 
-            if (idx < remapCount)
+            row.Children.Add(new TextBlock
             {
-                _drawRemapPanel.Children.Add(BuildRemapRow(idx, true));
-                _screenRemapPanel.Children.Add(BuildRemapRow(idx, false));
+                Text = $"{i}  {_vm.GetColorName(i)}",
+                Foreground = Brushes.LightGray,
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                Tag = "name",
+            });
 
-                var cb = new CheckBox
-                {
-                    Content = $"{i}",
-                    Foreground = Brushes.LightGray,
-                    FontSize = 10,
-                    Tag = idx,
-                };
-                cb.IsCheckedChanged += (_, _) =>
-                {
-                    if (cb.IsChecked.HasValue)
-                        _vm.SetTransparency(idx, cb.IsChecked.Value);
-                };
-                _transparencyPanel.Children.Add(cb);
-            }
+            row.PointerPressed += (_, _) => _vm.SelectedIndex = idx;
+            _swatchListPanel.Children.Add(row);
         }
 
-        RefreshAll();
+        UpdateSwatchHighlight();
     }
 
-    private Control BuildRemapRow(int idx, bool isDraw)
+    private void RefreshSwatchColors()
     {
-        var row = new StackPanel
+        foreach (var child in _swatchListPanel.Children)
         {
-            Orientation = Orientation.Horizontal,
-            Spacing = 4,
-            Children =
-            {
-                new Border
-                {
-                    Width = 14, Height = 14,
-                    Background = new SolidColorBrush(Pico8Colors.ToAvaloniaColor(idx)),
-                    VerticalAlignment = VerticalAlignment.Center,
-                },
-                new TextBlock { Text = "→", Foreground = Brushes.Gray, VerticalAlignment = VerticalAlignment.Center },
-            },
-        };
+            if (child is not StackPanel row || row.Tag is not int idx) continue;
+            if (row.Children[0] is Border swatch)
+                swatch.Background = new SolidColorBrush(Pico8Colors.ToAvaloniaColor(idx, _vm.ColorChip));
+        }
+    }
 
-        var combo = new ComboBox
+    private void RefreshSwatchNames()
+    {
+        foreach (var child in _swatchListPanel.Children)
         {
-            Width = 80,
-            ItemsSource = Enumerable.Range(0, Math.Min(_vm.ColorCount, 16)).Select(n => n.ToString()).ToList(),
-            SelectedIndex = Math.Min(idx, Math.Min(_vm.ColorCount, 16) - 1),
-            FontSize = 10,
-            Tag = (idx, isDraw),
-        };
-        combo.SelectionChanged += (_, _) =>
+            if (child is not StackPanel row || row.Tag is not int idx) continue;
+            foreach (var item in row.Children)
+            {
+                if (item is TextBlock { Tag: "name" } label)
+                    label.Text = $"{idx}  {_vm.GetColorName(idx)}";
+            }
+        }
+    }
+
+    private void UpdateSwatchHighlight()
+    {
+        foreach (var child in _swatchListPanel.Children)
         {
-            if (combo.SelectedIndex < 0) return;
-            if (isDraw) _vm.SetDrawRemap(idx, combo.SelectedIndex);
-            else _vm.SetScreenRemap(idx, combo.SelectedIndex);
-        };
-        row.Children.Add(combo);
-        return row;
+            if (child is not StackPanel row || row.Tag is not int idx) continue;
+            var selected = idx == _vm.SelectedIndex;
+            row.Background = selected
+                ? new SolidColorBrush(Color.Parse("#3E3E42"))
+                : Brushes.Transparent;
+            row.Margin = new Thickness(selected ? 0 : 0, 1);
+        }
+    }
+
+    private void RefreshPreviewPanel()
+    {
+        _currentPreview.Background = new SolidColorBrush(_vm.CommittedColor());
+
+        _syncingPicker = true;
+        try
+        {
+            _colorView.Color = _vm.PendingColor;
+        }
+        finally
+        {
+            _syncingPicker = false;
+        }
+
+        _newPreview.Background = new SolidColorBrush(_vm.PendingColor);
+        _hexInput.Text = _vm.PendingHex;
+        _nameInput.Text = _vm.PendingName;
+        _confirmBtn.IsEnabled = _vm.CanEditColors && _vm.HasPendingChange;
+        RefreshTransparencyCheck();
+    }
+
+    private void RefreshTransparencyCheck()
+    {
+        var idx = _vm.SelectedIndex;
+        if (idx < 0 || idx >= _vm.Transparency.Count) return;
+        _transpCheck.IsChecked = _vm.Transparency[idx];
+    }
+
+    private void UpdateHeader() =>
+        _headerBlock.Text = $"Palette Editor — Profile: {_vm.ProfileName} | {_vm.EditStatusText}";
+
+    private void UpdateEditEnabled()
+    {
+        var enabled = _vm.CanEditColors;
+        _colorView.IsEnabled = enabled;
+        _hexInput.IsEnabled = enabled;
+        _nameInput.IsEnabled = enabled;
+        _confirmBtn.IsEnabled = enabled && _vm.HasPendingChange;
+        _disabledLabel.IsVisible = !enabled;
+    }
+
+    private void RefreshAll()
+    {
+        UpdateHeader();
+        RefreshSwatchColors();
+        RefreshSwatchNames();
+        RefreshPreviewPanel();
+        UpdateSwatchHighlight();
+        UpdateEditEnabled();
     }
 
     private static TextBlock MakeSectionLabel(string text) => new()
@@ -287,7 +391,8 @@ public class PaletteEditorView : UserControl, IProfileAwareEditor
         Text = text,
         Foreground = Brushes.LightGray,
         FontSize = 11,
-        Margin = new Thickness(0, 0, 0, 4),
+        FontWeight = FontWeight.SemiBold,
+        Margin = new Thickness(0, 0, 0, 6),
     };
 
     private static Button MakeButton(string text, Action action)
@@ -295,70 +400,5 @@ public class PaletteEditorView : UserControl, IProfileAwareEditor
         var btn = new Button { Content = text, Padding = new Thickness(8, 3) };
         btn.Click += (_, _) => action();
         return btn;
-    }
-
-    private void RefreshRemapControls()
-    {
-        var drawIdx = 0;
-        var screenIdx = 0;
-        var transIdx = 0;
-        foreach (var child in _drawRemapPanel.Children.Skip(1))
-            if (child is StackPanel sp && sp.Children[^1] is ComboBox dc && drawIdx < _vm.DrawRemap.Count)
-                dc.SelectedIndex = _vm.DrawRemap[drawIdx++];
-        foreach (var child in _screenRemapPanel.Children.Skip(1))
-            if (child is StackPanel sp && sp.Children[^1] is ComboBox sc && screenIdx < _vm.ScreenRemap.Count)
-                sc.SelectedIndex = _vm.ScreenRemap[screenIdx++];
-        foreach (var child in _transparencyPanel.Children.Skip(1))
-            if (child is CheckBox cb && transIdx < _vm.Transparency.Count)
-                cb.IsChecked = _vm.Transparency[transIdx++];
-    }
-
-    private void RefreshSwatchColors()
-    {
-        foreach (var child in _swatchRow.Children)
-        {
-            if (child is Border swatch && swatch.Tag is int idx)
-                swatch.Background = new SolidColorBrush(Pico8Colors.ToAvaloniaColor(idx, _vm.ColorChip));
-        }
-    }
-
-    private void RefreshAll()
-    {
-        RefreshSwatchColors();
-        RefreshRemapControls();
-        UpdateDetailPanel();
-        UpdateSwatchHighlight();
-    }
-
-    private void UpdateSwatchHighlight()
-    {
-        foreach (var child in _swatchRow.Children)
-        {
-            if (child is Border swatch && swatch.Tag is int idx)
-            {
-                swatch.BorderBrush = idx == _vm.SelectedIndex ? Brushes.White : Brushes.Transparent;
-                swatch.BorderThickness = new Thickness(idx == _vm.SelectedIndex ? 2 : 0);
-            }
-        }
-        UpdateDetailPanel();
-    }
-
-    private void UpdateDetailPanel()
-    {
-        _colorIndexBlock.Text = $"Index: {_vm.SelectedIndex}";
-        _colorNameBlock.Text = _vm.ColorName;
-        _colorHexBlock.Text = _vm.ColorHex;
-        _colorRgbBlock.Text = _vm.ColorRgb;
-
-        var hex = _vm.ColorHex.TrimStart('#');
-        _hexInput.Text = $"#{hex}";
-
-        if (_vm.SelectedIndex >= 0)
-        {
-            var rgb = _vm.SwatchColor(_vm.SelectedIndex);
-            _rInput.Value = (rgb >> 16) & 0xFF;
-            _gInput.Value = (rgb >> 8) & 0xFF;
-            _bInput.Value = rgb & 0xFF;
-        }
     }
 }

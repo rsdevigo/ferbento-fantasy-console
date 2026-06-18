@@ -47,4 +47,30 @@ public class ColorChipTests
         Assert.Equal(0x0F380Fu, bus.Color.GetColor(0));
         Assert.Equal(0x9BBC0Fu, bus.Color.GetColor(3));
     }
+
+    [Fact]
+    public void SetColorName_PersistsToUserDataRegion()
+    {
+        var bus = new ChipBus(BuiltInProfiles.Pico8());
+        bus.Color.SetColorName(2, "custom-purple");
+
+        Assert.Equal("custom-purple", bus.Color.GetColorName(2));
+
+        var saved = (byte[])bus.Memory.Memory.Buffer.Clone();
+        var bus2 = new ChipBus(BuiltInProfiles.Pico8());
+        Array.Copy(saved, bus2.Memory.Memory.Buffer, saved.Length);
+        bus2.Color.LoadFromMemory();
+
+        Assert.Equal("custom-purple", bus2.Color.GetColorName(2));
+    }
+
+    [Fact]
+    public void ResetToPico8Canonical_RestoresDefaultNames()
+    {
+        var bus = new ChipBus(BuiltInProfiles.Pico8());
+        bus.Color.SetColorName(1, "my-blue");
+        bus.Color.ResetToPico8Canonical();
+
+        Assert.Equal("dark-blue", bus.Color.GetColorName(1));
+    }
 }

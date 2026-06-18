@@ -44,6 +44,7 @@ public sealed class PaletteSpec
     public int Colors { get; set; } = 16;
     public int TransparentIndex { get; set; } = 0;
     public string[]? DefaultColors { get; set; }
+    public bool AllowColorEdit { get; set; }
 }
 
 public sealed class SpriteSpec
