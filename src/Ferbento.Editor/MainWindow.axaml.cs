@@ -57,6 +57,7 @@ public partial class MainWindow : Window
         TilemapEditorView? tilemapView = null;
         PaletteEditorView? paletteView = null;
         ProfileEditorView? profileView = null;
+        MusicTrackerView? musicView = null;
 
         var newViews = new (string id, Control view)[]
         {
@@ -64,7 +65,7 @@ public partial class MainWindow : Window
             ("tilemap", tilemapView = new TilemapEditorView()),
             ("palette", paletteView = new PaletteEditorView()),
             ("sfx", new SfxEditorView()),
-            ("music", new MusicTrackerView()),
+            ("music", musicView = new MusicTrackerView()),
             ("assets", new AssetBrowserView()),
             ("profiles", profileView = new ProfileEditorView()),
             ("debug", new DebugPanelView()),
@@ -98,6 +99,12 @@ public partial class MainWindow : Window
         spriteView!.SetEditedHandler(markDirty);
         tilemapView!.SetEditedHandler(markDirty);
         paletteView!.SetEditedHandler(markDirty);
+        musicView!.SetEditedHandler(markDirty);
+
+        _session.GetMusicProject = () => musicView.ExportMusicData();
+        _session.SetMusicProject = data => musicView.ImportMusicData(data);
+        musicView.SetProjectLabel($"{_session.ProjectDisplayName}/MUSIC.JSON");
+        _session.DirtyChanged += () => musicView.SetProjectLabel($"{_session.ProjectDisplayName}/MUSIC.JSON");
 
         paletteView!.PaletteChanged += () =>
         {

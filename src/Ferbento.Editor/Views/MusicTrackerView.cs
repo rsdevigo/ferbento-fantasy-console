@@ -1,4 +1,3 @@
-using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -6,312 +5,409 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
-using Ferbento.Editor.ViewModels;
+using Ferbento.Core.Chips;
+using Ferbento.Editor.Chrome;
+using Ferbento.Editor.Music;
+using Ferbento.Editor.Music.Controls;
+using Ferbento.Profiles.Models;
 
 namespace Ferbento.Editor.Views;
 
-public class MusicTrackerView : UserControl
+public class MusicTrackerView : UserControl, IProfileAwareEditor
 {
-    private readonly MusicTrackerViewModel _vm = new();
-    private readonly MusicGridCanvas _gridCanvas;
-    private readonly Grid _root;
-    private readonly ScrollViewer _scroller = new();
+    private readonly MusicEditorController _ctrl = new();
+    private readonly MusicPatternCanvas _patternCanvas = new();
+    private readonly PatternStrip _patternStrip = new();
+    private readonly PianoKeyboardView _piano = new();
+    private readonly TextBlock _headerPath = new();
+    private readonly TextBlock _headerClock = new();
+    private readonly TextBox _songNameBox = new();
+    private readonly TextBlock _statusBar = new();
+    private readonly StepperControl _patternStepper = new() { Label = "PATTERN" };
+    private readonly StepperControl _lengthStepper = new() { Label = "LENGTH" };
+    private readonly StepperControl _tempoStepper = new() { Label = "TEMPO" };
+    private readonly StepperControl _autoIncStepper = new() { Label = "AUTO INCREMENT" };
+    private readonly StepperControl _instrumentStepper = new() { Label = "INSTRUMENT" };
+    private readonly StepperControl _octaveStepper = new() { Label = "OCTAVE" };
+    private readonly StepperControl _volumeStepper = new() { Label = "VOLUME" };
+    private readonly ComboBox _noteCombo = new();
+    private readonly ScrollViewer _gridScroll = new();
     private readonly DispatcherTimer _playbackTimer = new();
-    private readonly Button _playBtn;
-    private readonly Button _stopBtn;
-    private readonly NumericUpDown _patternControl;
-    private readonly NumericUpDown _speedControl;
-    private readonly NumericUpDown _loopStartControl;
-    private readonly NumericUpDown _loopEndControl;
+
+    private Action? _onEdited;
+    private string _projectLabel = "UNTITLED/MUSIC.JSON";
+
+    public MusicEditorController Controller => _ctrl;
+
+    public void SetEditedHandler(Action handler) => _onEdited = handler;
 
     public MusicTrackerView()
     {
-        HorizontalAlignment = HorizontalAlignment.Stretch;
-        VerticalAlignment = VerticalAlignment.Stretch;
+        Focusable = true;
+        Background = new SolidColorBrush(MusicTheme.Background);
+        Content = BuildLayout();
 
-        _gridCanvas = new MusicGridCanvas(_vm);
-
-        _playBtn = new Button { Content = "\u25B6 Play", Padding = new Thickness(8, 2) };
-        _stopBtn = new Button { Content = "\u23F9 Stop", Padding = new Thickness(8, 2) };
-        _patternControl = new NumericUpDown { Value = 0, Minimum = 0, Maximum = 63, Width = 60 };
-        _speedControl = new NumericUpDown { Value = 8, Minimum = 1, Maximum = 32, Width = 55 };
-        _loopStartControl = new NumericUpDown { Value = 0, Minimum = 0, Maximum = 63, Width = 45 };
-        _loopEndControl = new NumericUpDown { Value = 63, Minimum = 0, Maximum = 63, Width = 45 };
-
+        _patternCanvas.Bind(_ctrl);
         WireEvents();
 
         _playbackTimer.Interval = TimeSpan.FromMilliseconds(1000.0 / 30);
         _playbackTimer.Tick += (_, _) =>
         {
-            _vm.TickPlayback();
-            _gridCanvas.InvalidateVisual();
+            _ctrl.TickPlayback();
+            _patternCanvas.InvalidateVisual();
         };
         _playbackTimer.Start();
 
-        _root = BuildLayout();
-        Content = _root;
+        Loaded += (_, _) => Focus();
     }
+
+    public void SetProfile(HardwareProfile profile) => _ctrl.SetProfile(profile);
+
+    public void SetChipBus(ChipBus bus) => _ctrl.SetChipBus(bus);
+
+    public void RefreshFromBus() => _ctrl.RefreshFromBus();
+
+    public void SetProjectLabel(string label)
+    {
+        _projectLabel = label;
+        UpdateHeader();
+    }
+
+    public MusicProjectData ExportMusicData() => _ctrl.ExportProjectData();
+
+    public void ImportMusicData(MusicProjectData? data) => _ctrl.ImportProjectData(data);
 
     private void WireEvents()
     {
-        _playBtn.Click += (_, _) => _vm.Play();
-        _stopBtn.Click += (_, _) => _vm.Stop();
-
-        _patternControl.ValueChanged += (_, e) =>
-        {
-            if (e.NewValue.HasValue)
-                _vm.CurrentPattern = (int)e.NewValue.Value;
-        };
-
-        _speedControl.ValueChanged += (_, e) =>
-        {
-            if (e.NewValue.HasValue)
-                _vm.Speed = (int)e.NewValue.Value;
-        };
-
-        _loopStartControl.ValueChanged += (_, e) =>
-        {
-            if (e.NewValue.HasValue)
-                _vm.LoopStart = (int)e.NewValue.Value;
-        };
-
-        _loopEndControl.ValueChanged += (_, e) =>
-        {
-            if (e.NewValue.HasValue)
-                _vm.LoopEnd = (int)e.NewValue.Value;
-        };
-
-        _vm.PropertyChanged += (_, e) =>
+        _ctrl.Edited += () => _onEdited?.Invoke();
+        _ctrl.RefreshRequested += OnRefresh;
+        _ctrl.PropertyChanged += (_, e) =>
         {
             switch (e.PropertyName)
             {
-                case nameof(_vm.CurrentPattern):
-                    _patternControl.Value = _vm.CurrentPattern;
+                case nameof(_ctrl.CurrentPattern):
+                    _patternStepper.Value = _ctrl.CurrentPattern;
                     break;
-                case nameof(_vm.Speed):
-                    _speedControl.Value = _vm.Speed;
+                case nameof(_ctrl.Length):
+                    _lengthStepper.Value = _ctrl.Length;
+                    _lengthStepper.Maximum = _ctrl.RowsPerPattern - 1;
+                    _patternCanvas.InvalidateMeasure();
                     break;
-                case nameof(_vm.LoopStart):
-                    _loopStartControl.Value = _vm.LoopStart;
+                case nameof(_ctrl.Tempo):
+                    _tempoStepper.Value = _ctrl.Tempo;
                     break;
-                case nameof(_vm.LoopEnd):
-                    _loopEndControl.Value = _vm.LoopEnd;
+                case nameof(_ctrl.AutoIncrement):
+                    _autoIncStepper.Value = _ctrl.AutoIncrement;
                     break;
-                case nameof(_vm.PatternData):
-                    _gridCanvas.InvalidateVisual();
+                case nameof(_ctrl.SelectedInstrument):
+                    _instrumentStepper.Value = _ctrl.SelectedInstrument;
+                    break;
+                case nameof(_ctrl.SelectedOctave):
+                    _octaveStepper.Value = _ctrl.SelectedOctave;
+                    break;
+                case nameof(_ctrl.SelectedVolume):
+                    _volumeStepper.Value = _ctrl.SelectedVolume;
+                    break;
+                case nameof(_ctrl.SongName):
+                    if (_songNameBox.Text != _ctrl.SongName)
+                        _songNameBox.Text = _ctrl.SongName;
+                    break;
+                case nameof(_ctrl.StatusMessage):
+                    _statusBar.Text = _ctrl.StatusMessage;
+                    break;
+                case nameof(_ctrl.PatternCount):
+                case nameof(_ctrl.ChannelCount):
+                    SyncLimits();
+                    break;
+                case nameof(_ctrl.ProfileLabel):
+                    UpdateHeader();
                     break;
             }
         };
+
+        _songNameBox.TextChanged += (_, _) => _ctrl.SongName = _songNameBox.Text ?? "";
+
+        _patternStepper.ValueChanged += (_, v) => _ctrl.CurrentPattern = v;
+        _lengthStepper.ValueChanged += (_, v) => _ctrl.Length = v;
+        _tempoStepper.ValueChanged += (_, v) => _ctrl.Tempo = v;
+        _autoIncStepper.ValueChanged += (_, v) => _ctrl.AutoIncrement = v;
+        _instrumentStepper.ValueChanged += (_, v) => _ctrl.SelectedInstrument = v;
+        _octaveStepper.ValueChanged += (_, v) =>
+            _ctrl.SetNoteLetterOctave(_noteCombo.SelectedItem as string ?? "C", v);
+        _volumeStepper.ValueChanged += (_, v) => _ctrl.SelectedVolume = v;
+
+        _noteCombo.SelectionChanged += (_, _) =>
+        {
+            if (_noteCombo.SelectedItem is string letter)
+                _ctrl.SetNoteLetterOctave(letter, _ctrl.SelectedOctave);
+        };
+
+        _patternStrip.SlotSelected += (_, slot) => _ctrl.SequenceSlot = slot;
+        _patternStrip.GetPattern = slot => _ctrl.GetSequencePattern(slot);
+
+        _piano.NoteSelected += (_, note) => _ctrl.PlaceNoteAtSelection(note);
+
+        EditorKeyboardRouting.Attach(this, OnKeyDown, OnKeyUp, OnTextInput);
     }
 
-    private Grid BuildLayout()
+    private void SyncLimits()
     {
-        var layout = new Grid
+        _patternStepper.Maximum = Math.Max(0, _ctrl.PatternCount - 1);
+        _patternStepper.Value = _ctrl.CurrentPattern;
+        _instrumentStepper.Maximum = Math.Max(0, _ctrl.SfxSlotCount - 1);
+        _patternStrip.SlotCount = _ctrl.Document.Sequence.Length;
+        _patternCanvas.Bind(_ctrl);
+        _patternCanvas.InvalidateMeasure();
+        _patternCanvas.InvalidateVisual();
+        _patternStrip.InvalidateVisual();
+    }
+
+    private void OnRefresh()
+    {
+        _patternCanvas.InvalidateVisual();
+        _patternStrip.InvalidateVisual();
+        UpdateHeader();
+    }
+
+    private void UpdateHeader()
+    {
+        _headerPath.Text = $"{_projectLabel}*  [{_ctrl.ProfileLabel}]";
+        _headerClock.Text = DateTime.Now.ToString("ddd hh:mmtt yyyy").ToUpperInvariant();
+    }
+
+    private void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (_ctrl.HandleKey(e.Key.ToString(), e.KeyModifiers.HasFlag(KeyModifiers.Control),
+                e.KeyModifiers.HasFlag(KeyModifiers.Shift), e.KeyModifiers.HasFlag(KeyModifiers.Alt)))
+            e.Handled = true;
+    }
+
+    private void OnKeyUp(object? sender, KeyEventArgs e) { }
+
+    private void OnTextInput(object? sender, TextInputEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(e.Text) && _ctrl.HandleTextInput(e.Text))
+            e.Handled = true;
+    }
+
+    private Control BuildLayout()
+    {
+        _noteCombo.ItemsSource = new[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        _noteCombo.SelectedIndex = 0;
+        _noteCombo.Width = 60;
+        _noteCombo.Focusable = false;
+
+        _songNameBox.Text = "Untitled";
+        _songNameBox.Background = new SolidColorBrush(MusicTheme.GridBg);
+        _songNameBox.Foreground = new SolidColorBrush(MusicTheme.Accent);
+        _songNameBox.BorderBrush = new SolidColorBrush(MusicTheme.PanelBorder);
+        _songNameBox.MinWidth = 120;
+
+        _headerPath.Foreground = new SolidColorBrush(MusicTheme.Text);
+        _headerPath.FontSize = 11;
+        _headerClock.Foreground = new SolidColorBrush(MusicTheme.TextDim);
+        _headerClock.FontSize = 10;
+
+        _statusBar.Foreground = new SolidColorBrush(MusicTheme.TextDim);
+        _statusBar.FontSize = 10;
+        _statusBar.Text = _ctrl.StatusMessage;
+
+        _gridScroll.Content = _patternCanvas;
+        _gridScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+        _gridScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+
+        _patternStrip.GetPattern = slot => _ctrl.GetSequencePattern(slot);
+
+        var root = new Grid
         {
-            RowDefinitions = new RowDefinitions("Auto,*"),
-            Background = new SolidColorBrush(Color.Parse("#1E1E1E")),
+            RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*"),
+            Margin = new Thickness(8),
         };
 
-        var header = new Border
+        var header = new Grid
         {
-            Background = new SolidColorBrush(Color.Parse("#2D2D30")),
-            Padding = new Thickness(8, 4),
-            Child = new TextBlock
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            Children =
             {
-                Text = "Music Tracker — 64 patterns, 4 channels",
-                Foreground = new SolidColorBrush(Color.Parse("#CCCCCC")),
-                FontSize = 12,
+                _headerPath,
+                _headerClock,
             },
         };
+        Grid.SetColumn(_headerClock, 1);
 
-        var topBar = new StackPanel
+        var transport = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 6,
-            Margin = new Thickness(8, 4),
+            Margin = new Thickness(0, 6),
             Children =
             {
-                Label("Pat:"),
-                _patternControl,
-                SeparatorV(),
-                Label("Spd:"),
-                _speedControl,
-                SeparatorV(),
-                Label("Loop:"),
-                _loopStartControl,
-                Label("-"),
-                _loopEndControl,
-                SeparatorV(),
-                _playBtn,
-                _stopBtn,
-                new Button { Content = "Clear", Padding = new Thickness(8, 2) },
+                MakeTransportButton("\u270E", "Random", () => _ctrl.RandomGeneratePattern()),
+                MakeTransportButton("\u23ED", "Play Song", () => _ctrl.PlaySong()),
+                MakeTransportButton("\u25B6", "Play Pattern", () => _ctrl.PlayPattern()),
+                MakeTransportButton("\u23F9", "Stop", () => _ctrl.Stop()),
+                new TextBlock { Text = "SONG", Foreground = new SolidColorBrush(MusicTheme.TextDim), VerticalAlignment = VerticalAlignment.Center },
+                MakeArrowButton("<", () => _ctrl.CurrentPattern = Math.Max(0, _ctrl.CurrentPattern - 1)),
+                MakePatternLabel(),
+                MakeArrowButton(">", () => _ctrl.CurrentPattern = Math.Min(_ctrl.PatternCount - 1, _ctrl.CurrentPattern + 1)),
+                new TextBlock { Text = "NAME", Foreground = new SolidColorBrush(MusicTheme.TextDim), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) },
+                _songNameBox,
             },
         };
 
-        var clearBtn = (Button)topBar.Children[^1];
-        clearBtn.Click += (_, _) => _vm.ClearPattern();
-
-        _scroller.Content = _gridCanvas;
-        _scroller.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
-        _scroller.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-
-        var topPanel = new StackPanel
+        var patternRow = new Border
         {
-            Children = { header, topBar },
+            Background = new SolidColorBrush(MusicTheme.Panel),
+            BorderBrush = new SolidColorBrush(MusicTheme.PanelBorder),
+            BorderThickness = new Thickness(2),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(4),
+            Child = _patternStrip,
         };
 
-        Grid.SetRow(topPanel, 0);
-        Grid.SetRow(_scroller, 1);
-
-        layout.Children.Add(topPanel);
-        layout.Children.Add(_scroller);
-
-        return layout;
-    }
-
-    private static Border SeparatorV() => new()
-    {
-        Width = 1,
-        Height = 20,
-        Background = new SolidColorBrush(Color.Parse("#3A3A3A")),
-        Margin = new Thickness(2, 0),
-    };
-
-    private static TextBlock Label(string text) => new()
-    {
-        Text = text,
-        Foreground = new SolidColorBrush(Color.Parse("#CCCCCC")),
-        FontSize = 12,
-        VerticalAlignment = VerticalAlignment.Center,
-    };
-}
-
-internal sealed class MusicGridCanvas : Control
-{
-    private readonly MusicTrackerViewModel _vm;
-
-    private const int RowH = 18;
-    private const int RowNumW = 30;
-    private const int CellW = 72;
-    private const int HeaderH = 20;
-
-    private const int TotalRows = 64;
-    private const int TotalChannels = 4;
-
-    private int _hoverRow = -1;
-    private int _hoverCh = -1;
-
-    private static readonly Color BgColor = Color.Parse("#0E0E0E");
-    private static readonly Color GridLine = Color.Parse("#1A1A2E");
-    private static readonly Color HeaderBg = Color.Parse("#1E1E1E");
-    private static readonly Color NoteColor = Color.Parse("#44AA44");
-    private static readonly Color HoverColor = Color.Parse("#334466");
-    private static readonly Color AltRowColor = Color.FromArgb(10, 255, 255, 255);
-
-    private static readonly Typeface Typeface = Typeface.Default;
-    private static readonly string[] ChLabels = { "CH1", "CH2", "CH3", "CH4" };
-
-    public MusicGridCanvas(MusicTrackerViewModel vm)
-    {
-        _vm = vm;
-        Width = RowNumW + TotalChannels * CellW + 4;
-        Height = HeaderH + TotalRows * RowH + 4;
-
-        PointerPressed += OnPressed;
-        PointerMoved += OnMoved;
-        PointerExited += (_, _) => { _hoverRow = -1; _hoverCh = -1; InvalidateVisual(); };
-    }
-
-    private void OnPressed(object? sender, PointerPressedEventArgs e)
-    {
-        var pos = e.GetPosition(this);
-        var (row, ch) = PosToGrid(pos);
-        if (row >= 0 && row < TotalRows && ch >= 0 && ch < TotalChannels)
+        var settingsRow = new StackPanel
         {
-            _vm.ToggleCell(row, ch);
-        }
-    }
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Margin = new Thickness(0, 6),
+            Children = { _patternStepper, _lengthStepper, _tempoStepper, _autoIncStepper },
+        };
 
-    private void OnMoved(object? sender, PointerEventArgs e)
-    {
-        var pos = e.GetPosition(this);
-        var (row, ch) = PosToGrid(pos);
-        if (row != _hoverRow || ch != _hoverCh)
+        var instrumentRow = new StackPanel
         {
-            _hoverRow = row;
-            _hoverCh = ch;
-            InvalidateVisual();
-        }
-    }
-
-    private (int row, int ch) PosToGrid(Point pos)
-    {
-        if (pos.X < RowNumW || pos.Y < HeaderH)
-            return (-1, -1);
-        int row = (int)((pos.Y - HeaderH) / RowH);
-        int ch = (int)((pos.X - RowNumW) / CellW);
-        return (row, ch);
-    }
-
-    public override void Render(DrawingContext ctx)
-    {
-        base.Render(ctx);
-        int w = RowNumW + TotalChannels * CellW;
-        int h = HeaderH + TotalRows * RowH;
-
-        ctx.FillRectangle(new SolidColorBrush(HeaderBg), new Rect(0, 0, w, HeaderH));
-
-        for (int c = 0; c < TotalChannels; c++)
-        {
-            double x = RowNumW + c * CellW + 4;
-            var ft = new FormattedText(ChLabels[c], CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 10, null);
-            ctx.DrawText(ft, new Point(x, 2));
-        }
-
-        for (int r = 0; r < TotalRows; r++)
-        {
-            double y = HeaderH + r * RowH;
-
-            if (r % 8 == 0)
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Margin = new Thickness(0, 6),
+            Children =
             {
-                var rowNumFt = new FormattedText(r.ToString("X").PadLeft(2, '0'), CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 9, null);
-                ctx.DrawText(rowNumFt, new Point(2, y + 1));
-            }
+                _instrumentStepper,
+                MakeNotePanel(),
+                _octaveStepper,
+                _volumeStepper,
+            },
+        };
 
-            if (r % 2 == 1)
-            {
-                ctx.FillRectangle(new SolidColorBrush(AltRowColor), new Rect(RowNumW, y, TotalChannels * CellW, RowH));
-            }
+        var pianoRow = new Border
+        {
+            Background = new SolidColorBrush(MusicTheme.Panel),
+            BorderBrush = new SolidColorBrush(MusicTheme.PanelBorder),
+            BorderThickness = new Thickness(2),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(4),
+            Child = _piano,
+        };
 
-            for (int c = 0; c < TotalChannels; c++)
-            {
-                double x = RowNumW + c * CellW;
-                var cellRect = new Rect(x, y, CellW, RowH);
+        Grid.SetRow(header, 0);
+        Grid.SetRow(transport, 1);
+        Grid.SetRow(patternRow, 2);
+        Grid.SetRow(settingsRow, 3);
+        Grid.SetRow(_gridScroll, 4);
+        Grid.SetRow(instrumentRow, 5);
+        Grid.SetRow(pianoRow, 6);
+        Grid.SetRow(_statusBar, 7);
 
-                bool hasNote = _vm.HasNoteAt(r, c);
-                bool isHover = r == _hoverRow && c == _hoverCh;
+        root.Children.Add(header);
+        root.Children.Add(transport);
+        root.Children.Add(patternRow);
+        root.Children.Add(settingsRow);
+        root.Children.Add(_gridScroll);
+        root.Children.Add(instrumentRow);
+        root.Children.Add(pianoRow);
+        root.Children.Add(_statusBar);
 
-                Color cellColor = BgColor;
-                if (isHover)
-                    cellColor = HoverColor;
-                else if (hasNote)
-                    cellColor = NoteColor;
+        var chrome = root;
+        EditorKeyboardRouting.PreventFocusSteal(chrome);
+        chrome.PointerPressed += (_, _) => Focus();
 
-                ctx.FillRectangle(new SolidColorBrush(cellColor), cellRect);
+        SyncInitialSteppers();
+        return chrome;
+    }
 
-                if (hasNote)
-                {
-                    string display = _vm.GetCellDisplay(r, c);
-                    var ft = new FormattedText(display, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 9, null);
-                    ctx.DrawText(ft, new Point(x + 2, y + 1));
-                }
+    private Control MakePatternLabel()
+    {
+        var tb = new TextBlock
+        {
+            Foreground = new SolidColorBrush(MusicTheme.Accent),
+            FontWeight = FontWeight.Bold,
+            FontSize = 14,
+            VerticalAlignment = VerticalAlignment.Center,
+            MinWidth = 28,
+            TextAlignment = TextAlignment.Center,
+            Text = _ctrl.CurrentPattern.ToString("D2"),
+        };
+        _ctrl.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(_ctrl.CurrentPattern))
+                tb.Text = _ctrl.CurrentPattern.ToString("D2");
+        };
+        return tb;
+    }
 
-                ctx.DrawLine(new Pen(new SolidColorBrush(GridLine), 0.3), new Point(x, y), new Point(x + CellW, y));
-                ctx.DrawLine(new Pen(new SolidColorBrush(GridLine), 0.3), new Point(x, y), new Point(x, y + RowH));
-            }
-        }
+    private Control MakeNotePanel()
+    {
+        var panel = new StackPanel { Spacing = 2 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "NOTE",
+            Foreground = new SolidColorBrush(MusicTheme.TextDim),
+            FontSize = 9,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        });
+        panel.Children.Add(_noteCombo);
+        return panel;
+    }
 
-        ctx.DrawLine(new Pen(new SolidColorBrush(GridLine), 0.5), new Point(0, h - 1), new Point(w, h - 1));
-        ctx.DrawLine(new Pen(new SolidColorBrush(GridLine), 0.5), new Point(w - 1, 0), new Point(w - 1, h));
+    private static Button MakeTransportButton(string icon, string tip, Action onClick)
+    {
+        var btn = new Button
+        {
+            Content = icon,
+            Padding = new Thickness(8, 4),
+            Background = new SolidColorBrush(MusicTheme.ButtonFace),
+            Foreground = new SolidColorBrush(MusicTheme.Accent),
+            BorderBrush = new SolidColorBrush(MusicTheme.PanelBorder),
+            BorderThickness = new Thickness(2),
+            Focusable = false,
+        };
+        ToolTip.SetTip(btn, tip);
+        btn.Click += (_, _) => onClick();
+        return btn;
+    }
+
+    private static Button MakeArrowButton(string glyph, Action onClick)
+    {
+        var btn = new Button
+        {
+            Content = glyph,
+            Padding = new Thickness(6, 2),
+            Background = new SolidColorBrush(MusicTheme.ButtonFace),
+            Foreground = new SolidColorBrush(MusicTheme.Accent),
+            Focusable = false,
+        };
+        btn.Click += (_, _) => onClick();
+        return btn;
+    }
+
+    private void SyncInitialSteppers()
+    {
+        _patternStepper.Minimum = 0;
+        _patternStepper.Maximum = 63;
+        _lengthStepper.Minimum = 1;
+        _lengthStepper.Maximum = 63;
+        _lengthStepper.Value = 32;
+        _tempoStepper.Minimum = 1;
+        _tempoStepper.Maximum = 255;
+        _tempoStepper.Value = 8;
+        _autoIncStepper.Minimum = 0;
+        _autoIncStepper.Maximum = 16;
+        _autoIncStepper.Value = 1;
+        _instrumentStepper.Minimum = 0;
+        _instrumentStepper.Maximum = 63;
+        _octaveStepper.Minimum = 0;
+        _octaveStepper.Maximum = 8;
+        _octaveStepper.Value = 4;
+        _volumeStepper.Minimum = 0;
+        _volumeStepper.Maximum = 7;
+        _volumeStepper.Value = 7;
     }
 }

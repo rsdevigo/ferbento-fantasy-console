@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Ferbento.Core.Chips;
+using Ferbento.Editor.Music;
 using Ferbento.Profiles.BuiltIn;
 
 namespace Ferbento.Editor;
@@ -10,6 +11,7 @@ public sealed class EditorProjectFile
     public string ProfileName { get; set; } = "Pico-8";
     public string Source { get; set; } = "";
     public string MemoryBase64 { get; set; } = "";
+    public MusicProjectData? Music { get; set; }
 
     public static EditorProjectFile FromSession(EditorSession session, string source)
     {
@@ -20,6 +22,7 @@ public sealed class EditorProjectFile
             ProfileName = session.Profile.Name,
             Source = source,
             MemoryBase64 = Convert.ToBase64String(bytes),
+            Music = session.GetMusicProject?.Invoke(),
         };
     }
 
@@ -38,6 +41,7 @@ public sealed class EditorProjectFile
             session.Bus.Color.LoadFromMemory();
         }
 
+        session.SetMusicProject?.Invoke(Music);
         session.RefreshEditorsFromBus();
     }
 

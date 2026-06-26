@@ -45,4 +45,18 @@ public sealed class MusicChip : IChip
     {
         _bus.Sound.Engine.SetMusicSpeed(speed);
     }
+
+    public int PatternCount => _patternCount;
+    public int RowsPerPattern => _bus.Sound.Engine.MusicRowsPerPattern;
+    public int TrackCount => _bus.Sound.Engine.MusicTrackCount;
+    public int PlayheadRow => _bus.Sound.Engine.MusicPlayheadRow;
+    public bool IsPlaying => _bus.Sound.Engine.IsMusicPlaying;
+
+    public int ChannelMask(int channelCount)
+    {
+        int mask = 0;
+        for (int i = 0; i < channelCount; i++)
+            mask |= 1 << i;
+        return mask;
+    }
 }

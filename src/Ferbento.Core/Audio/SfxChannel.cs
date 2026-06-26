@@ -57,6 +57,8 @@ public sealed class SfxChannel : ISampleProvider
     private int _patternIndex;
     private int _speed = 4;
     private int _frameCounter;
+    private readonly int _samplesPerTick;
+    private int _tickSampleCounter;
     
     private int _loopStart;
     private int _loopEnd = 31;
@@ -95,6 +97,7 @@ public sealed class SfxChannel : ISampleProvider
     {
         _channelIndex = channelIndex;
         _sampleRate = sampleRate;
+        _samplesPerTick = System.Math.Max(1, sampleRate / 60);
         _waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, 1);
         ClearPattern();
     }
@@ -146,10 +149,31 @@ public sealed class SfxChannel : ISampleProvider
         _commandQueue.Enqueue(() => _playing = false);
     }
 
+    public void FlushCommands() => ProcessCommands();
+
+    public float NextSample()
+    {
+        if (!_playing)
+            return 0f;
+
+        float sample = (float)GetNextSample();
+
+        _tickSampleCounter++;
+        if (_tickSampleCounter >= _samplesPerTick)
+        {
+            _tickSampleCounter = 0;
+            _frameCounter++;
+            if (_frameCounter >= _speed)
+                AdvanceNote();
+        }
+
+        return sample;
+    }
+
     public int Read(float[] buffer, int offset, int count)
     {
         ProcessCommands();
-        
+
         if (!_playing)
         {
             Array.Clear(buffer, offset, count);
@@ -157,15 +181,7 @@ public sealed class SfxChannel : ISampleProvider
         }
 
         for (int i = 0; i < count; i++)
-        {
-            buffer[offset + i] = (float)GetNextSample();
-        }
-
-        _frameCounter++;
-        if (_frameCounter >= _speed)
-        {
-            AdvanceNote();
-        }
+            buffer[offset + i] = NextSample();
 
         return count;
     }

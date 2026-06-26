@@ -14,6 +14,7 @@ public sealed class SoundChip : IChip
     {
         _sfxSlots = profile.Audio.SfxSlots;
         Engine = new AudioEngine(profile.Audio.SampleRate, profile.Audio.Channels, profile.Audio.SfxSlots);
+        Engine.ConfigureMusic(profile.Audio.MusicPatterns);
     }
 
     public void Initialize(ChipBus bus)
@@ -58,5 +59,6 @@ public sealed class SoundChip : IChip
     public (int start, int end) GetSlotLoop(int slotIndex) => Engine.GetSlotLoop(slotIndex);
     public void SetSlotLoop(int slotIndex, int start, int end) => Engine.SetSlotLoop(slotIndex, start, end);
     public void LoadSlotToChannel(int slotIndex, int channel) => Engine.LoadSlotToChannel(slotIndex, channel);
+    public void PreviewNote(int channel, SfxNote note, int speed = 4) => Engine.PreviewNote(channel, note, speed);
     public int SfxSlotCount => _sfxSlots;
 }

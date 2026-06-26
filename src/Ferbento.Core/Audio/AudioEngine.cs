@@ -7,39 +7,55 @@ public sealed class AudioEngine : IDisposable
 {
     private readonly int _sampleRate;
     private readonly int _channels;
+    private readonly int _samplesPerTick;
     private readonly SfxChannel[] _sfxChannels;
     private readonly WaveOutEvent? _waveOut;
     private readonly BufferedWaveProvider _mixer;
     private readonly object _lock = new();
-    
+
     private readonly SfxNote[][] _sfxSlots;
     private readonly int[] _slotSpeed = new int[64];
     private readonly int[] _slotLoopStart = new int[64];
     private readonly int[] _slotLoopEnd = new int[64];
-    
-    private int[][] _musicPatterns = new int[64][];
+
+    private int[][] _musicPatterns = [];
+    private int _musicPatternCount = 64;
+    private int _musicRowsPerPattern = 64;
     private int _currentMusicPattern = -1;
     private int _musicPatternIndex = 0;
     private int _musicSpeed = 4;
     private int _musicSpeedCounter = 0;
+    private int _musicTickSampleCounter;
     private int _musicLoopStart = 0;
     private int _musicLoopEnd = 63;
     private bool _musicPlaying = false;
-    private readonly int[] _musicChannelMap = new int[4];
-    
+    private int _lastRenderedMusicRow = -1;
+    private int[] _musicChannelMap = [];
+
     private readonly ConcurrentQueue<Action> _commandQueue = new();
+    private Thread? _pumpThread;
+    private volatile bool _pumpRunning;
+
+    private const double TargetBufferSeconds = 0.12;
+    private const int MaxSamplesPerPump = 4096;
 
     public IReadOnlyList<SfxChannel> Channels => _sfxChannels;
     public int SampleRate => _sampleRate;
     public bool IsMusicPlaying => _musicPlaying;
+    public int MusicPlayheadRow => _musicPatternIndex;
+    public int MusicCurrentPattern => _currentMusicPattern;
+    public int MusicPatternCount => _musicPatternCount;
+    public int MusicRowsPerPattern => _musicRowsPerPattern;
+    public int MusicTrackCount => _channels;
     public int SfxSlotCount => _sfxSlots.Length;
 
     public AudioEngine(int sampleRate = 22050, int channels = 4, int sfxSlots = 64)
     {
         _sampleRate = sampleRate;
         _channels = channels;
+        _samplesPerTick = System.Math.Max(1, sampleRate / 60);
         _sfxChannels = new SfxChannel[channels];
-        
+
         for (int i = 0; i < channels; i++)
             _sfxChannels[i] = new SfxChannel(i, sampleRate);
 
@@ -51,10 +67,13 @@ public sealed class AudioEngine : IDisposable
             _slotLoopEnd[i] = 31;
         }
 
+        ConfigureMusic(64, 64);
+        _musicChannelMap = new int[_channels];
+
         _mixer = new BufferedWaveProvider(WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, 1))
         {
-            BufferDuration = TimeSpan.FromMilliseconds(200),
-            DiscardOnBufferOverflow = true
+            BufferDuration = TimeSpan.FromMilliseconds(300),
+            DiscardOnBufferOverflow = false
         };
 
         try
@@ -66,6 +85,7 @@ public sealed class AudioEngine : IDisposable
             };
             _waveOut.Init(_mixer);
             _waveOut.Play();
+            StartPumpThread();
         }
         catch
         {
@@ -83,34 +103,85 @@ public sealed class AudioEngine : IDisposable
 
     public void Update()
     {
-        ProcessCommands();
+        lock (_lock)
+        {
+            ProcessCommands();
+            if (_pumpThread == null)
+                FillBufferToTarget();
+        }
+    }
 
+    private void StartPumpThread()
+    {
+        _pumpRunning = true;
+        _pumpThread = new Thread(PumpLoop)
+        {
+            IsBackground = true,
+            Name = "FerbentoAudioPump"
+        };
+        _pumpThread.Start();
+    }
+
+    private void PumpLoop()
+    {
+        while (_pumpRunning)
+        {
+            lock (_lock)
+                FillBufferToTarget();
+            Thread.Sleep(3);
+        }
+    }
+
+    private void FillBufferToTarget()
+    {
         if (_waveOut == null) return;
 
-        var buffer = new float[_sampleRate / 60];
-        var mixed = new float[buffer.Length];
-        
+        ProcessCommands();
+        FlushChannelCommands();
+
+        double bufferedSeconds = _mixer.BufferedBytes / (4.0 * _sampleRate);
+        int samplesNeeded = (int)((TargetBufferSeconds - bufferedSeconds) * _sampleRate);
+        if (samplesNeeded <= 0) return;
+
+        samplesNeeded = System.Math.Min(samplesNeeded, MaxSamplesPerPump);
+        GenerateSamples(samplesNeeded);
+    }
+
+    private void FlushChannelCommands()
+    {
         for (int ch = 0; ch < _channels; ch++)
+            _sfxChannels[ch].FlushCommands();
+    }
+
+    private void GenerateSamples(int count)
+    {
+        var mixed = new float[count];
+
+        for (int i = 0; i < count; i++)
         {
-            var channelBuffer = new float[buffer.Length];
-            int read = _sfxChannels[ch].Read(channelBuffer, 0, buffer.Length);
-            for (int i = 0; i < read; i++)
-                mixed[i] += channelBuffer[i];
+            if (_musicPlaying)
+            {
+                _musicTickSampleCounter++;
+                if (_musicTickSampleCounter >= _samplesPerTick)
+                {
+                    _musicTickSampleCounter = 0;
+                    UpdateMusic();
+                    if (_musicPatternIndex != _lastRenderedMusicRow)
+                    {
+                        _lastRenderedMusicRow = _musicPatternIndex;
+                        RenderMusicPattern();
+                        FlushChannelCommands();
+                    }
+                }
+            }
+
+            float sample = 0;
+            for (int ch = 0; ch < _channels; ch++)
+                sample += _sfxChannels[ch].NextSample();
+            mixed[i] = System.Math.Clamp(sample, -1f, 1f);
         }
 
-        if (_musicPlaying)
-        {
-            UpdateMusic();
-            var musicBuffer = new float[buffer.Length];
-            RenderMusicPattern(musicBuffer);
-            for (int i = 0; i < buffer.Length; i++)
-                mixed[i] += musicBuffer[i];
-        }
-
-        for (int i = 0; i < mixed.Length; i++)
-            mixed[i] = System.Math.Clamp(mixed[i], -1f, 1f);
-
-        byte[] byteBuffer = new byte[mixed.Length * 4];
+        var byteBuffer = new byte[mixed.Length * sizeof(float)];
         Buffer.BlockCopy(mixed, 0, byteBuffer, 0, byteBuffer.Length);
         _mixer.AddSamples(byteBuffer, 0, byteBuffer.Length);
     }
@@ -118,7 +189,7 @@ public sealed class AudioEngine : IDisposable
     public void PlaySfx(int sfxIndex, int channel = -1, int offset = 0)
     {
         if (sfxIndex < 0 || sfxIndex >= _sfxSlots.Length) return;
-        
+
         if (channel >= 0 && channel < _channels)
         {
             LoadSlotToChannel(sfxIndex, channel);
@@ -152,7 +223,7 @@ public sealed class AudioEngine : IDisposable
     {
         if (slotIndex < 0 || slotIndex >= _sfxSlots.Length) return;
         if (channel < 0 || channel >= _channels) return;
-        
+
         var slot = _sfxSlots[slotIndex];
         for (int i = 0; i < 32; i++)
             _sfxChannels[channel].SetNote(i, slot[i]);
@@ -234,15 +305,35 @@ public sealed class AudioEngine : IDisposable
             _sfxChannels[channel].SetLoop(start, end);
     }
 
+    public void PreviewNote(int channel, SfxNote note, int speed = 4)
+    {
+        if (channel < 0 || channel >= _channels) return;
+        _sfxChannels[channel].SetNote(0, note);
+        _sfxChannels[channel].SetSpeed(speed);
+        _sfxChannels[channel].Play(0);
+    }
+
+    public void ConfigureMusic(int patternCount, int rowsPerPattern = 64)
+    {
+        _musicPatternCount = System.Math.Max(1, patternCount);
+        _musicRowsPerPattern = System.Math.Max(1, rowsPerPattern);
+        _musicPatterns = new int[_musicPatternCount][];
+        _musicLoopEnd = System.Math.Min(_musicLoopEnd, _musicRowsPerPattern - 1);
+    }
+
+    public int PatternCellCount => _musicRowsPerPattern * _channels;
+
     public void SetMusicPattern(int patternIndex, int[] patternData)
     {
-        if (patternIndex >= 0 && patternIndex < 64)
+        if (patternIndex >= 0 && patternIndex < _musicPatternCount)
             _musicPatterns[patternIndex] = patternData;
     }
 
     public int[] GetMusicPattern(int patternIndex)
     {
-        return patternIndex >= 0 && patternIndex < 64 ? _musicPatterns[patternIndex] ?? new int[0] : new int[0];
+        if (patternIndex < 0 || patternIndex >= _musicPatternCount)
+            return [];
+        return _musicPatterns[patternIndex] ?? [];
     }
 
     public void PlayMusic(int patternIndex, int fade = 0, int channelMask = 15)
@@ -252,22 +343,36 @@ public sealed class AudioEngine : IDisposable
             _currentMusicPattern = patternIndex;
             _musicPatternIndex = _musicLoopStart;
             _musicSpeedCounter = 0;
+            _musicTickSampleCounter = 0;
+            _lastRenderedMusicRow = -1;
             _musicPlaying = true;
-            
-            for (int i = 0; i < 4; i++)
+
+            if (_musicChannelMap.Length != _channels)
+                _musicChannelMap = new int[_channels];
+
+            for (int i = 0; i < _channels; i++)
                 _musicChannelMap[i] = (channelMask & (1 << i)) != 0 ? i : -1;
+
+            RenderMusicPattern();
+            _lastRenderedMusicRow = _musicPatternIndex;
         });
     }
 
     public void StopMusic()
     {
-        _commandQueue.Enqueue(() => _musicPlaying = false);
+        _commandQueue.Enqueue(() =>
+        {
+            _musicPlaying = false;
+            _lastRenderedMusicRow = -1;
+            _musicTickSampleCounter = 0;
+        });
     }
 
     public void SetMusicLoop(int start, int end)
     {
-        _musicLoopStart = System.Math.Clamp(start, 0, 63);
-        _musicLoopEnd = System.Math.Clamp(end, _musicLoopStart, 63);
+        int maxRow = _musicRowsPerPattern - 1;
+        _musicLoopStart = System.Math.Clamp(start, 0, maxRow);
+        _musicLoopEnd = System.Math.Clamp(end, _musicLoopStart, maxRow);
     }
 
     public void SetMusicSpeed(int speed)
@@ -287,22 +392,22 @@ public sealed class AudioEngine : IDisposable
         }
     }
 
-    private void RenderMusicPattern(float[] buffer)
+    private void RenderMusicPattern()
     {
-        if (_currentMusicPattern < 0 || _currentMusicPattern >= 64)
+        if (_currentMusicPattern < 0 || _currentMusicPattern >= _musicPatternCount)
             return;
 
         var pattern = _musicPatterns[_currentMusicPattern];
         if (pattern == null || pattern.Length == 0)
             return;
 
-        int row = _musicPatternIndex * 4;
-        for (int ch = 0; ch < 4; ch++)
+        int rowBase = _musicPatternIndex * _channels;
+        for (int ch = 0; ch < _channels; ch++)
         {
-            int mappedChannel = _musicChannelMap[ch];
+            int mappedChannel = ch < _musicChannelMap.Length ? _musicChannelMap[ch] : ch;
             if (mappedChannel < 0 || mappedChannel >= _channels) continue;
-            
-            int noteIndex = row + ch;
+
+            int noteIndex = rowBase + ch;
             if (noteIndex < pattern.Length)
             {
                 int noteData = pattern[noteIndex];
@@ -313,7 +418,7 @@ public sealed class AudioEngine : IDisposable
                     int volume = (noteData >> 12) & 0x7;
                     int effect = (noteData >> 15) & 0x7;
                     int effectParam = (noteData >> 18) & 0x3FF;
-                    
+
                     var sfxNote = new SfxNote(note, instrument, volume, (SfxEffect)effect, effectParam);
                     _sfxChannels[mappedChannel].SetNote(0, sfxNote);
                     _sfxChannels[mappedChannel].SetSpeed(_musicSpeed);
@@ -325,6 +430,9 @@ public sealed class AudioEngine : IDisposable
 
     public void Dispose()
     {
+        _pumpRunning = false;
+        _pumpThread?.Join(500);
+
         _waveOut?.Stop();
         _waveOut?.Dispose();
         _mixer.ClearBuffer();
