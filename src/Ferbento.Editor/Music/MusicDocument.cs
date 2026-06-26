@@ -106,7 +106,7 @@ public sealed class MusicDocument
     }
 
     public int ClampInstrument(int instrument) =>
-        Math.Clamp(instrument, 0, Math.Max(0, SfxSlotCount - 1));
+        Math.Clamp(instrument, 0, 7);
 
     public int ClampPattern(int pattern) => Math.Clamp(pattern, 0, PatternCount - 1);
     public int ClampChannel(int channel) => Math.Clamp(channel, 0, ChannelCount - 1);

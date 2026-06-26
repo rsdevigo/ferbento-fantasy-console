@@ -81,9 +81,13 @@ public sealed class SfxChannel : ISampleProvider
     private int _arpeggioNotes = 0;
     private int _arpeggioIndex = 0;
     private double _arpeggioTimer = 0;
-    
+
+    private double _noiseSample;
+    private double _lastNoiseAdvance;
+    private uint _noiseRng = 0xACE1u;
+
     private bool _playing;
-    
+
     private readonly ConcurrentQueue<Action> _commandQueue = new();
 
     public WaveFormat WaveFormat => _waveFormat;
@@ -146,7 +150,25 @@ public sealed class SfxChannel : ISampleProvider
 
     public void Stop()
     {
-        _commandQueue.Enqueue(() => _playing = false);
+        _commandQueue.Enqueue(Silence);
+    }
+
+    public void StopImmediate() => Silence();
+
+    private void Silence()
+    {
+        _playing = false;
+        _currentNote = 0;
+        _currentVolume = 0;
+        _currentInstrument = 0;
+        _currentEffect = SfxEffect.None;
+        _currentEffectParam = 0;
+        _phase = 0;
+        _patternIndex = 0;
+        _frameCounter = 0;
+        _tickSampleCounter = 0;
+        _noiseSample = 0;
+        _lastNoiseAdvance = 0;
     }
 
     public void FlushCommands() => ProcessCommands();
@@ -194,7 +216,7 @@ public sealed class SfxChannel : ISampleProvider
 
     private void AdvanceNote()
     {
-        if (_patternIndex >= 32)
+        if (_patternIndex > _loopEnd)
         {
             if (_loopEnd > _loopStart)
             {
@@ -202,20 +224,39 @@ public sealed class SfxChannel : ISampleProvider
             }
             else
             {
-                _playing = false;
+                Silence();
                 return;
             }
         }
 
+        if (_patternIndex < 0 || _patternIndex >= 32)
+        {
+            Silence();
+            return;
+        }
+
         var note = _pattern[_patternIndex];
-        if (!note.IsEmpty)
+        if (note.IsEmpty)
+        {
+            // Empty step is an actual rest: do not sustain previous tone.
+            _currentNote = 0;
+            _currentInstrument = 0;
+            _currentVolume = 0;
+            _currentEffect = SfxEffect.None;
+            _currentEffectParam = 0;
+            _noiseSample = 0;
+            _lastNoiseAdvance = _phase / (2 * System.Math.PI);
+        }
+        else
         {
             _currentNote = note.Note;
             _currentInstrument = note.Instrument;
             _currentVolume = note.Volume;
             _currentEffect = note.Effect;
             _currentEffectParam = note.EffectParam;
-            
+
+            _noiseSample = 0;
+            _lastNoiseAdvance = _phase / (2 * System.Math.PI);
             InitializeEffect();
         }
         
@@ -271,7 +312,7 @@ public sealed class SfxChannel : ISampleProvider
 
     private double GetNextSample()
     {
-        if (!_playing)
+        if (!_playing || _currentVolume <= 0 || _currentNote <= 0)
             return 0;
 
         double freq = NoteToFrequency(_currentNote);
@@ -310,10 +351,22 @@ public sealed class SfxChannel : ISampleProvider
         _phase += freq * 2 * System.Math.PI / _sampleRate;
         if (_phase > 2 * System.Math.PI) _phase -= 2 * System.Math.PI;
 
-        var waveform = (SfxWaveform)(_currentInstrument & 7);
-        double sample = GenerateWaveform(waveform, _phase, _currentVolume / 7.0);
+        var waveform = ResolveWaveform(_currentInstrument);
+        double advance = _phase / (2 * System.Math.PI);
+        double volume = _currentVolume / 7.0;
+        double sample = GenerateWaveform(waveform, _phase, advance, volume, _currentNote);
         
         return sample;
+    }
+
+    private static SfxWaveform ResolveWaveform(int instrument)
+    {
+        // Built-in waveforms 0-7. Instruments 8-15 are custom SFX slots in Pico-8 (not yet implemented).
+        if (instrument >= 0 && instrument < 8)
+            return (SfxWaveform)instrument;
+
+        // Melodic fallback only (triangle/saw/square) — never noise via % 4.
+        return (SfxWaveform)(instrument % 3);
     }
 
     private static double NoteToFrequency(int note)
@@ -322,20 +375,43 @@ public sealed class SfxChannel : ISampleProvider
         return 440.0 * System.Math.Pow(2.0, (note - 69) / 12.0);
     }
 
-    private static double GenerateWaveform(SfxWaveform waveform, double phase, double volume)
+    private double GenerateWaveform(SfxWaveform waveform, double phase, double advance, double volume, int note)
     {
         return waveform switch
         {
-            SfxWaveform.Triangle => TriangleWave(phase) * volume,
-            SfxWaveform.Sawtooth => SawtoothWave(phase) * volume,
-            SfxWaveform.Square => SquareWave(phase) * volume,
-            SfxWaveform.Noise => (Random.Shared.NextDouble() * 2 - 1) * volume,
-            SfxWaveform.Pulse25 => PulseWave(phase, 0.25) * volume,
-            SfxWaveform.Pulse12 => PulseWave(phase, 0.125) * volume,
-            SfxWaveform.Triangle2 => TriangleWave(phase * 2) * volume,
-            SfxWaveform.Noise2 => (Random.Shared.NextDouble() * 2 - 1) * volume * 0.5,
+            SfxWaveform.Triangle => TriangleWave(phase) * 0.5 * volume,
+            SfxWaveform.Sawtooth => SawtoothWave(phase) * 0.65 * volume,
+            SfxWaveform.Square => SquareWave(phase) * 0.25 * volume,
+            SfxWaveform.Noise => GenerateFilteredNoise(advance, note, volume),
+            SfxWaveform.Pulse25 => PulseWave(phase, 0.25) * 0.25 * volume,
+            SfxWaveform.Pulse12 => PulseWave(phase, 0.125) * 0.25 * volume,
+            SfxWaveform.Triangle2 => TriangleWave(phase * 2) * 0.5 * volume,
+            SfxWaveform.Noise2 => GenerateFilteredNoise(advance, note, volume * 0.5),
             _ => 0
         };
+    }
+
+    // Pico-8-style filtered noise (see zepto8 synth.cpp); avoids per-sample white noise hiss.
+    private double GenerateFilteredNoise(double advance, int note, double volume)
+    {
+        const double tscale = 8.858923;
+        double scale = (advance - _lastNoiseAdvance) * tscale;
+        if (scale < 0)
+            scale = 0;
+
+        double random = NextNoiseRandom() * 2 - 1;
+        _noiseSample = (_noiseSample + scale * random) / (1.0 + scale);
+
+        double factor = 1.0 - System.Math.Clamp(note / 63.0, 0, 1);
+        double sample = _noiseSample * 1.0 * (0.75 + factor * 0.5) * volume;
+        _lastNoiseAdvance = advance;
+        return sample;
+    }
+
+    private double NextNoiseRandom()
+    {
+        _noiseRng = unchecked(_noiseRng * 1664525u + 1013904223u);
+        return (_noiseRng >> 16) / 65536.0;
     }
 
     private static double TriangleWave(double phase) => 2 * System.Math.Abs(2 * (phase / (2 * System.Math.PI) - System.Math.Floor(phase / (2 * System.Math.PI) + 0.5))) - 1;

@@ -46,6 +46,11 @@ public sealed class MusicChip : IChip
         _bus.Sound.Engine.SetMusicSpeed(speed);
     }
 
+    public void SetMusicRepeat(bool repeat)
+    {
+        _bus.Sound.Engine.SetMusicRepeat(repeat);
+    }
+
     public int PatternCount => _patternCount;
     public int RowsPerPattern => _bus.Sound.Engine.MusicRowsPerPattern;
     public int TrackCount => _bus.Sound.Engine.MusicTrackCount;

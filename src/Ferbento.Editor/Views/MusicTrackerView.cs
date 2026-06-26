@@ -88,6 +88,9 @@ public class MusicTrackerView : UserControl, IProfileAwareEditor
                 case nameof(_ctrl.CurrentPattern):
                     _patternStepper.Value = _ctrl.CurrentPattern;
                     break;
+                case nameof(_ctrl.SequenceSlot):
+                    _patternStrip.SelectedSlot = _ctrl.SequenceSlot;
+                    break;
                 case nameof(_ctrl.Length):
                     _lengthStepper.Value = _ctrl.Length;
                     _lengthStepper.Maximum = _ctrl.RowsPerPattern - 1;
@@ -142,7 +145,11 @@ public class MusicTrackerView : UserControl, IProfileAwareEditor
                 _ctrl.SetNoteLetterOctave(letter, _ctrl.SelectedOctave);
         };
 
-        _patternStrip.SlotSelected += (_, slot) => _ctrl.SequenceSlot = slot;
+        _patternStrip.SlotSelected += (_, slot) =>
+        {
+            _ctrl.SequenceSlot = slot;
+            _ctrl.CurrentPattern = _ctrl.GetSequencePattern(slot);
+        };
         _patternStrip.GetPattern = slot => _ctrl.GetSequencePattern(slot);
 
         _piano.NoteSelected += (_, note) => _ctrl.PlaceNoteAtSelection(note);
@@ -154,7 +161,7 @@ public class MusicTrackerView : UserControl, IProfileAwareEditor
     {
         _patternStepper.Maximum = Math.Max(0, _ctrl.PatternCount - 1);
         _patternStepper.Value = _ctrl.CurrentPattern;
-        _instrumentStepper.Maximum = Math.Max(0, _ctrl.SfxSlotCount - 1);
+        _instrumentStepper.Maximum = 7;
         _patternStrip.SlotCount = _ctrl.Document.Sequence.Length;
         _patternCanvas.Bind(_ctrl);
         _patternCanvas.InvalidateMeasure();
@@ -242,14 +249,14 @@ public class MusicTrackerView : UserControl, IProfileAwareEditor
             Margin = new Thickness(0, 6),
             Children =
             {
-                MakeTransportButton("\u270E", "Random", () => _ctrl.RandomGeneratePattern()),
+                MakeTransportButton("\u270E", "Generate Pattern", () => _ctrl.RandomGeneratePattern()),
                 MakeTransportButton("\u23ED", "Play Song", () => _ctrl.PlaySong()),
                 MakeTransportButton("\u25B6", "Play Pattern", () => _ctrl.PlayPattern()),
                 MakeTransportButton("\u23F9", "Stop", () => _ctrl.Stop()),
-                new TextBlock { Text = "SONG", Foreground = new SolidColorBrush(MusicTheme.TextDim), VerticalAlignment = VerticalAlignment.Center },
-                MakeArrowButton("<", () => _ctrl.CurrentPattern = Math.Max(0, _ctrl.CurrentPattern - 1)),
-                MakePatternLabel(),
-                MakeArrowButton(">", () => _ctrl.CurrentPattern = Math.Min(_ctrl.PatternCount - 1, _ctrl.CurrentPattern + 1)),
+                new TextBlock { Text = "SEQ", Foreground = new SolidColorBrush(MusicTheme.TextDim), VerticalAlignment = VerticalAlignment.Center },
+                MakeArrowButton("<", () => _ctrl.SequenceSlot = Math.Max(0, _ctrl.SequenceSlot - 1)),
+                MakeSequenceSlotLabel(),
+                MakeArrowButton(">", () => _ctrl.SequenceSlot = Math.Min(_ctrl.Document.Sequence.Length - 1, _ctrl.SequenceSlot + 1)),
                 new TextBlock { Text = "NAME", Foreground = new SolidColorBrush(MusicTheme.TextDim), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) },
                 _songNameBox,
             },
@@ -323,7 +330,7 @@ public class MusicTrackerView : UserControl, IProfileAwareEditor
         return chrome;
     }
 
-    private Control MakePatternLabel()
+    private Control MakeSequenceSlotLabel()
     {
         var tb = new TextBlock
         {
@@ -333,12 +340,12 @@ public class MusicTrackerView : UserControl, IProfileAwareEditor
             VerticalAlignment = VerticalAlignment.Center,
             MinWidth = 28,
             TextAlignment = TextAlignment.Center,
-            Text = _ctrl.CurrentPattern.ToString("D2"),
+            Text = _ctrl.SequenceSlot.ToString("D2"),
         };
         _ctrl.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName == nameof(_ctrl.CurrentPattern))
-                tb.Text = _ctrl.CurrentPattern.ToString("D2");
+            if (e.PropertyName == nameof(_ctrl.SequenceSlot))
+                tb.Text = _ctrl.SequenceSlot.ToString("D2");
         };
         return tb;
     }
@@ -402,7 +409,7 @@ public class MusicTrackerView : UserControl, IProfileAwareEditor
         _autoIncStepper.Maximum = 16;
         _autoIncStepper.Value = 1;
         _instrumentStepper.Minimum = 0;
-        _instrumentStepper.Maximum = 63;
+        _instrumentStepper.Maximum = 7;
         _octaveStepper.Minimum = 0;
         _octaveStepper.Maximum = 8;
         _octaveStepper.Value = 4;

@@ -38,7 +38,7 @@ public sealed class MusicPatternCanvas : Control
 
         int channels = _ctrl.ChannelCount;
         int length = _ctrl.Length;
-        int playhead = _ctrl.PlayheadRow;
+        int playhead = _ctrl.IsPlaying ? _ctrl.ClampedPlayheadRow : -1;
 
         for (int ch = 0; ch < channels; ch++)
         {
@@ -58,11 +58,9 @@ public sealed class MusicPatternCanvas : Control
                 bool hasNote = _ctrl.HasNoteAt(step, ch);
                 bool selected = step == _ctrl.SelectedRow && ch == _ctrl.SelectedChannel;
                 bool hover = step == _hoverRow && ch == _hoverChannel;
-                bool isPlayhead = _ctrl.IsPlaying && step == playhead;
 
                 var fill = MusicTheme.GridBg;
-                if (isPlayhead) fill = MusicTheme.Playhead;
-                else if (selected) fill = MusicTheme.Accent;
+                if (selected) fill = MusicTheme.Accent;
                 else if (hover) fill = MusicTheme.ButtonFace;
                 else if (hasNote) fill = Color.FromArgb(180, 255, 255, 255);
 
@@ -74,6 +72,18 @@ public sealed class MusicPatternCanvas : Control
                     new SolidColorBrush(hasNote ? MusicTheme.PanelBorder : MusicTheme.TextDim));
                 ctx.DrawText(glyph, new Point(x + 6, y + 6));
             }
+        }
+
+        if (playhead >= 0 && playhead < length)
+        {
+            double x = LabelW + playhead * StepW;
+            double top = 2;
+            double bottom = channels * RowH - 2;
+            var playheadPen = new Pen(new SolidColorBrush(Colors.White), 2);
+            ctx.DrawLine(playheadPen, new Point(x + StepW / 2.0, top), new Point(x + StepW / 2.0, bottom));
+
+            var headRect = new Rect(x + 2, top, StepW - 4, 4);
+            ctx.FillRectangle(new SolidColorBrush(MusicTheme.Playhead), headRect);
         }
     }
 

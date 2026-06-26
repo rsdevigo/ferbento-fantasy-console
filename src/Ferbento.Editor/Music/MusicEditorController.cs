@@ -135,7 +135,15 @@ public sealed class MusicEditorController : INotifyPropertyChanged
     public int SequenceSlot
     {
         get => _sequenceSlot;
-        set { _sequenceSlot = Math.Clamp(value, 0, Document.Sequence.Length - 1); Notify(); RefreshRequested?.Invoke(); }
+        set
+        {
+            var clamped = Math.Clamp(value, 0, Document.Sequence.Length - 1);
+            if (_sequenceSlot == clamped) return;
+            _sequenceSlot = clamped;
+            CurrentPattern = GetSequencePattern(clamped);
+            Notify();
+            RefreshRequested?.Invoke();
+        }
     }
 
     public bool IsPlaying
@@ -239,6 +247,9 @@ public sealed class MusicEditorController : INotifyPropertyChanged
 
     public void ToggleCell(int row, int channel)
     {
+        SelectedRow = row;
+        SelectedChannel = channel;
+
         int before = Document.GetCell(_currentPattern, row, channel);
         int after;
         if (before == 0)
@@ -251,7 +262,6 @@ public sealed class MusicEditorController : INotifyPropertyChanged
         Undo.Execute(new MusicCellCommand(Document, _currentPattern, row, channel, before, after));
         MarkEdited();
         RefreshRequested?.Invoke();
-        AdvanceAfterEdit(row);
     }
 
     public void PlaceNoteAtSelection(int midiNote)
@@ -295,7 +305,8 @@ public sealed class MusicEditorController : INotifyPropertyChanged
         if (_bus == null) return;
         SaveCurrentPattern();
         _bus.Music.SetMusicSpeed(_tempo);
-        _bus.Music.SetMusicLoop(_loopStart, _loopEnd);
+        _bus.Music.SetMusicRepeat(false);
+        _bus.Music.SetMusicLoop(_loopStart, Math.Min(_loopEnd, _length - 1));
         int mask = _bus.Music.ChannelMask(ChannelCount);
         _bus.Music.Music(_currentPattern, 0, mask);
         IsPlaying = true;
@@ -304,7 +315,14 @@ public sealed class MusicEditorController : INotifyPropertyChanged
 
     public void PlaySong()
     {
-        PlayPattern();
+        if (_bus == null) return;
+        SaveCurrentPattern();
+        _bus.Music.SetMusicSpeed(_tempo);
+        _bus.Music.SetMusicRepeat(true);
+        _bus.Music.SetMusicLoop(_loopStart, Math.Min(_loopEnd, _length - 1));
+        int mask = _bus.Music.ChannelMask(ChannelCount);
+        _bus.Music.Music(_currentPattern, 0, mask);
+        IsPlaying = true;
         StatusMessage = "Playing song sequence...";
     }
 
@@ -345,25 +363,21 @@ public sealed class MusicEditorController : INotifyPropertyChanged
 
     public void RandomGeneratePattern()
     {
-        var rng = Random.Shared;
-        var data = Document.CreateEmptyPattern();
-        for (int row = 0; row < _length; row++)
-        {
-            for (int ch = 0; ch < ChannelCount; ch++)
-            {
-                if (rng.Next(4) == 0)
-                {
-                    int note = 48 + rng.Next(24);
-                    data[Document.GetCellIndex(row, ch)] = MusicNoteCodec.Pack(
-                        note, rng.Next(4), rng.Next(5, 8), SfxEffect.None, 0);
-                }
-            }
-        }
+        var data = MusicPatternGenerator.Generate(
+            _length, ChannelCount, _selectedInstrument, _selectedVolume);
 
-        Undo.Execute(new MusicPatternReplaceCommand(Document, _currentPattern, data, "Random pattern"));
+        Undo.Execute(new MusicPatternReplaceCommand(Document, _currentPattern, data, "Generate pattern"));
         MarkEdited();
-        StatusMessage = "RANDOMLY GENERATE A NEW SONG.";
+        StatusMessage = $"Generated pattern {_currentPattern:D2}.";
         RefreshRequested?.Invoke();
+    }
+
+    public int ClampedPlayheadRow => ClampPlayheadRow(PlayheadRow, _length);
+
+    public static int ClampPlayheadRow(int playheadRow, int patternLength)
+    {
+        if (playheadRow < 0) return -1;
+        return Math.Clamp(playheadRow, 0, patternLength - 1);
     }
 
     public bool HandleKey(string key, bool ctrl, bool shift, bool alt)

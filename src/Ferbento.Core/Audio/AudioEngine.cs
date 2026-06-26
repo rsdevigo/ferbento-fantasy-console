@@ -29,6 +29,7 @@ public sealed class AudioEngine : IDisposable
     private int _musicLoopStart = 0;
     private int _musicLoopEnd = 63;
     private bool _musicPlaying = false;
+    private bool _musicRepeat = true;
     private int _lastRenderedMusicRow = -1;
     private int[] _musicChannelMap = [];
 
@@ -106,6 +107,7 @@ public sealed class AudioEngine : IDisposable
         lock (_lock)
         {
             ProcessCommands();
+            FlushChannelCommands();
             if (_pumpThread == null)
                 FillBufferToTarget();
         }
@@ -360,12 +362,21 @@ public sealed class AudioEngine : IDisposable
 
     public void StopMusic()
     {
-        _commandQueue.Enqueue(() =>
+        lock (_lock)
         {
             _musicPlaying = false;
+            _currentMusicPattern = -1;
             _lastRenderedMusicRow = -1;
             _musicTickSampleCounter = 0;
-        });
+            StopAllChannels();
+            _mixer.ClearBuffer();
+        }
+    }
+
+    private void StopAllChannels()
+    {
+        for (int i = 0; i < _channels; i++)
+            _sfxChannels[i].StopImmediate();
     }
 
     public void SetMusicLoop(int start, int end)
@@ -380,6 +391,11 @@ public sealed class AudioEngine : IDisposable
         _musicSpeed = System.Math.Max(1, speed);
     }
 
+    public void SetMusicRepeat(bool repeat)
+    {
+        _musicRepeat = repeat;
+    }
+
     private void UpdateMusic()
     {
         _musicSpeedCounter++;
@@ -388,7 +404,18 @@ public sealed class AudioEngine : IDisposable
             _musicSpeedCounter = 0;
             _musicPatternIndex++;
             if (_musicPatternIndex > _musicLoopEnd)
-                _musicPatternIndex = _musicLoopStart;
+            {
+                if (_musicRepeat)
+                {
+                    _musicPatternIndex = _musicLoopStart;
+                }
+                else
+                {
+                    _musicPlaying = false;
+                    StopAllChannels();
+                    return;
+                }
+            }
         }
     }
 
@@ -421,8 +448,13 @@ public sealed class AudioEngine : IDisposable
 
                     var sfxNote = new SfxNote(note, instrument, volume, (SfxEffect)effect, effectParam);
                     _sfxChannels[mappedChannel].SetNote(0, sfxNote);
+                    _sfxChannels[mappedChannel].SetLoop(0, 0);
                     _sfxChannels[mappedChannel].SetSpeed(_musicSpeed);
                     _sfxChannels[mappedChannel].Play(0);
+                }
+                else
+                {
+                    _sfxChannels[mappedChannel].StopImmediate();
                 }
             }
         }
