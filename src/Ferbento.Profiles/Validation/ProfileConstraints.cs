@@ -26,6 +26,7 @@ public sealed class ProfileConstraints
     public int CartRomSize => Profile.Memory.CartRom;
     public int AudioChannels => Profile.Audio.Channels;
     public int SfxSlotCount => Profile.Audio.SfxSlots;
+    public int NotesPerSfx => Profile.Audio.NotesPerSfx;
     public int MusicPatternCount => Profile.Audio.MusicPatterns;
     public int AudioSampleRate => Profile.Audio.SampleRate;
     public int MaxTokens => Profile.Code.MaxTokens;

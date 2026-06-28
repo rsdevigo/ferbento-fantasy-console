@@ -1,4 +1,3 @@
-using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -6,400 +5,511 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
-using Ferbento.Core.Audio;
+using Ferbento.Core.Chips;
+using Ferbento.Editor.Chrome;
+using Ferbento.Editor.Sfx;
+using Ferbento.Editor.Sfx.Controls;
 using Ferbento.Editor.ViewModels;
+using Ferbento.Profiles.Models;
 
 namespace Ferbento.Editor.Views;
 
-public class SfxEditorView : UserControl
+public class SfxEditorView : UserControl, IProfileAwareEditor
 {
-    private readonly SfxEditorViewModel _vm = new();
-    private readonly SfxGridCanvas _gridCanvas;
-    private readonly Grid _root;
-    private readonly ScrollViewer _scroller = new();
-    private readonly DispatcherTimer _playbackTimer = new();
-    private readonly Button _playBtn;
-    private readonly Button _stopBtn;
+  private readonly SfxEditorViewModel _vm = new();
+  private SfxEditorController Ctrl => _vm.Controller;
 
-    private readonly NumericUpDown _slotControl;
-    private readonly NumericUpDown _channelControl;
-    private readonly NumericUpDown _speedControl;
-    private readonly NumericUpDown _loopStartControl;
-    private readonly NumericUpDown _loopEndControl;
-    private readonly ComboBox _waveformControl;
+  private readonly SfxPianoRoll _pianoRoll = new();
+  private readonly SfxPropertyStrip _propertyStrip = new();
+  private readonly SfxInspectorPanel _inspector = new();
+  private readonly EditorToolStrip _toolStrip = new();
+  private readonly EditorStatusBar _statusBar = new();
+  private readonly ScrollViewer _rollScroll = new();
+  private readonly ScrollViewer _stripScroll = new();
+  private readonly DispatcherTimer _playbackTimer = new();
 
-    private readonly NumericUpDown _detailVolume;
-    private readonly ComboBox _detailEffect;
-    private readonly NumericUpDown _detailEffectParam;
-    private readonly TextBlock _detailPitchLabel;
-    private readonly StackPanel _detailPanel;
+  private readonly TextBox _slotField = CreateCompactField(30, 3);
+  private readonly TextBlock _slotHex = new()
+  {
+    FontSize = 9,
+    Foreground = new SolidColorBrush(SfxTheme.MutedText),
+    VerticalAlignment = VerticalAlignment.Center,
+  };
+  private readonly TextBox _nameBox = CreateCompactField(72, 8, monospace: false);
+  private readonly TextBox _speedField = CreateCompactField(30, 3);
+  private readonly TextBox _loopStartField = CreateCompactField(26, 2);
+  private readonly TextBox _loopEndField = CreateCompactField(26, 2);
+  private readonly TextBlock _loopDash = new()
+  {
+    Text = "-",
+    Foreground = Brushes.LightGray,
+    VerticalAlignment = VerticalAlignment.Center,
+    FontSize = 11,
+  };
+  private readonly ToggleButton _loopToggle = new() { Content = "Loop", Padding = new Thickness(6, 2), FontSize = 11 };
 
-    public SfxEditorView()
+  private Action? _onEdited;
+  private bool _syncing;
+
+  public SfxEditorController Controller => Ctrl;
+
+  public void SetEditedHandler(Action handler) => _onEdited = handler;
+
+  public SfxEditorView()
+  {
+    Focusable = true;
+    HorizontalAlignment = HorizontalAlignment.Stretch;
+    VerticalAlignment = VerticalAlignment.Stretch;
+    Background = new SolidColorBrush(SfxTheme.Background);
+
+    Content = BuildLayout();
+    WireEvents();
+
+    _playbackTimer.Interval = TimeSpan.FromMilliseconds(1000.0 / 30);
+    _playbackTimer.Tick += (_, _) =>
     {
-        HorizontalAlignment = HorizontalAlignment.Stretch;
-        VerticalAlignment = VerticalAlignment.Stretch;
+      Ctrl.TickPlayback();
+      _pianoRoll.InvalidateVisual();
+    };
+    _playbackTimer.Start();
 
-        _gridCanvas = new SfxGridCanvas(_vm);
+    EditorKeyboardRouting.Attach(this, OnKeyDown, OnKeyUp, OnTextInput);
+    Loaded += (_, _) => Focus();
+  }
 
-        _playBtn = new Button { Content = "\u25B6 Play", Padding = new Thickness(8, 2) };
-        _stopBtn = new Button { Content = "\u23F9 Stop", Padding = new Thickness(8, 2) };
+  public void SetProfile(HardwareProfile profile)
+  {
+    Ctrl.SetProfile(profile);
+    ApplyProfileLimits();
+    RefreshVisuals();
+  }
 
-        _slotControl = new NumericUpDown { Value = 0, Minimum = 0, Maximum = 63, Width = 55 };
-        _channelControl = new NumericUpDown { Value = 0, Minimum = 0, Maximum = 3, Width = 50 };
-        _speedControl = new NumericUpDown { Value = 4, Minimum = 1, Maximum = 255, Width = 55 };
-        _loopStartControl = new NumericUpDown { Value = 0, Minimum = 0, Maximum = 31, Width = 45 };
-        _loopEndControl = new NumericUpDown { Value = 31, Minimum = 0, Maximum = 31, Width = 45 };
-        _waveformControl = new ComboBox { Width = 90, ItemsSource = SfxEditorViewModel.WaveformNames, SelectedIndex = 0 };
+  public void SetChipBus(ChipBus bus)
+  {
+    Ctrl.SetChipBus(bus);
+    ApplyProfileLimits();
+    RefreshVisuals();
+  }
 
-        _detailPitchLabel = new TextBlock
-        {
-            Text = "--",
-            Foreground = new SolidColorBrush(Color.Parse("#FFB347")),
-            FontSize = 14,
-            FontWeight = FontWeight.Bold,
-            Width = 50,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        _detailVolume = new NumericUpDown { Value = 7, Minimum = 0, Maximum = 7, Width = 50 };
-        _detailEffect = new ComboBox
-        {
-            Width = 80,
-            ItemsSource = SfxEditorViewModel.EffectNames,
-            SelectedIndex = 0,
-        };
-        _detailEffectParam = new NumericUpDown { Value = 0, Minimum = 0, Maximum = 255, Width = 60 };
+  private void ApplyProfileLimits()
+  {
+    _pianoRoll.Bind(Ctrl);
+    _propertyStrip.Bind(Ctrl);
+    _inspector.Bind(Ctrl);
+    SyncControls();
+  }
 
-        _detailPanel = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            Margin = new Thickness(8, 4),
-            IsVisible = false,
-            Children =
-            {
-                Label("Note:"),
-                _detailPitchLabel,
-                Label("Vol:"),
-                _detailVolume,
-                Label("FX:"),
-                _detailEffect,
-                Label("Val:"),
-                _detailEffectParam,
-            },
-        };
+  public void RefreshFromBus()
+  {
+    Ctrl.RefreshFromBus();
+    SyncControls();
+    RefreshVisuals();
+  }
 
-        WireEvents();
-
-        _playbackTimer.Interval = TimeSpan.FromMilliseconds(1000.0 / 30);
-        _playbackTimer.Tick += (_, _) =>
-        {
-            _vm.TickPlayback();
-            _gridCanvas.PlayheadCol = _vm.GetPlayheadColumn();
-            _gridCanvas.InvalidateVisual();
-        };
-        _playbackTimer.Start();
-
-        _root = BuildLayout();
-        Content = _root;
-    }
-
-    private void WireEvents()
+  private void WireEvents()
+  {
+    Ctrl.Edited += () => _onEdited?.Invoke();
+    Ctrl.RefreshRequested += RefreshVisuals;
+    Ctrl.PropertyChanged += (_, e) =>
     {
-        _playBtn.Click += (_, _) => _vm.Play();
-        _stopBtn.Click += (_, _) => _vm.Stop();
-
-        _slotControl.ValueChanged += (_, e) =>
-        {
-            if (e.NewValue.HasValue)
-                _vm.SelectedSlot = (int)e.NewValue.Value;
-        };
-
-        _channelControl.ValueChanged += (_, e) =>
-        {
-            if (e.NewValue.HasValue)
-                _vm.SelectedChannel = (int)e.NewValue.Value;
-        };
-
-        _speedControl.ValueChanged += (_, e) =>
-        {
-            if (e.NewValue.HasValue)
-                _vm.Speed = (int)e.NewValue.Value;
-        };
-
-        _loopStartControl.ValueChanged += (_, e) =>
-        {
-            if (e.NewValue.HasValue)
-                _vm.LoopStart = (int)e.NewValue.Value;
-        };
-
-        _loopEndControl.ValueChanged += (_, e) =>
-        {
-            if (e.NewValue.HasValue)
-                _vm.LoopEnd = (int)e.NewValue.Value;
-        };
-
-        _waveformControl.SelectionChanged += (_, e) =>
-        {
-            if (e.AddedItems.Count > 0)
-                _vm.DefaultWaveform = _waveformControl.SelectedIndex;
-        };
-
-        _vm.PropertyChanged += (_, e) =>
-        {
-            switch (e.PropertyName)
-            {
-                case nameof(_vm.Speed):
-                    _speedControl.Value = _vm.Speed;
-                    break;
-                case nameof(_vm.LoopStart):
-                    _loopStartControl.Value = _vm.LoopStart;
-                    break;
-                case nameof(_vm.LoopEnd):
-                    _loopEndControl.Value = _vm.LoopEnd;
-                    break;
-                case nameof(_vm.SelectedSlot):
-                    _slotControl.Value = _vm.SelectedSlot;
-                    break;
-                case nameof(_vm.SelectedChannel):
-                    _channelControl.Value = _vm.SelectedChannel;
-                    break;
-                case nameof(_vm.ActiveSlot):
-                    _gridCanvas.InvalidateVisual();
-                    break;
-                case nameof(_vm.HasSelectedNote):
-                    _detailPanel.IsVisible = _vm.HasSelectedNote;
-                    if (_vm.HasSelectedNote)
-                    {
-                        _detailPitchLabel.Text = _vm.SelectedNotePitch;
-                        _detailVolume.Value = _vm.SelectedNoteVolume;
-                        _detailEffect.SelectedIndex = (int)_vm.SelectedNoteEffect;
-                        _detailEffectParam.Value = _vm.SelectedNoteEffectParam;
-                    }
-                    break;
-            }
-        };
-
-        _detailVolume.ValueChanged += (_, e) =>
-        {
-            if (e.NewValue.HasValue && _vm.HasSelectedNote)
-                _vm.SelectedNoteVolume = (int)e.NewValue.Value;
-        };
-
-        _detailEffect.SelectionChanged += (_, e) =>
-        {
-            if (_vm.HasSelectedNote && e.AddedItems.Count > 0)
-                _vm.SelectedNoteEffect = (SfxEffect)_detailEffect.SelectedIndex;
-        };
-
-        _detailEffectParam.ValueChanged += (_, e) =>
-        {
-            if (e.NewValue.HasValue && _vm.HasSelectedNote)
-                _vm.SelectedNoteEffectParam = (int)e.NewValue.Value;
-        };
-    }
-
-    private Grid BuildLayout()
-    {
-        var layout = new Grid
-        {
-            RowDefinitions = new RowDefinitions("Auto,*,Auto"),
-            Background = new SolidColorBrush(Color.Parse("#1E1E1E")),
-        };
-
-        var topBar = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 6,
-            Margin = new Thickness(8, 4),
-            Children =
-            {
-                Label("Slot:"),
-                _slotControl,
-                SeparatorV(),
-                Label("Ch:"),
-                _channelControl,
-                SeparatorV(),
-                Label("Wave:"),
-                _waveformControl,
-                SeparatorV(),
-                Label("Spd:"),
-                _speedControl,
-                SeparatorV(),
-                Label("Loop:"),
-                _loopStartControl,
-                Label("-"),
-                _loopEndControl,
-                SeparatorV(),
-                _playBtn,
-                _stopBtn,
-                new Button { Content = "Clear", Padding = new Thickness(8, 2) },
-            },
-        };
-
-        var clearBtn = (Button)topBar.Children[^1];
-        clearBtn.Click += (_, _) => _vm.ClearPatternAll();
-
-        _scroller.Content = _gridCanvas;
-        _scroller.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
-        _scroller.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-
-        Grid.SetRow(topBar, 0);
-        Grid.SetRow(_scroller, 1);
-        Grid.SetRow(_detailPanel, 2);
-
-        layout.Children.Add(topBar);
-        layout.Children.Add(_scroller);
-        layout.Children.Add(_detailPanel);
-
-        return layout;
-    }
-
-    private static Border SeparatorV() => new()
-    {
-        Width = 1,
-        Height = 20,
-        Background = new SolidColorBrush(Color.Parse("#3A3A3A")),
-        Margin = new Thickness(2, 0),
+      switch (e.PropertyName)
+      {
+        case nameof(SfxEditorController.SelectedSlot):
+          SyncControls();
+          break;
+        case nameof(SfxEditorController.Speed):
+        case nameof(SfxEditorController.LoopStart):
+        case nameof(SfxEditorController.LoopEnd):
+        case nameof(SfxEditorController.SlotName):
+        case nameof(SfxEditorController.LoopPlayback):
+          SyncControls();
+          break;
+        case nameof(SfxEditorController.Tool):
+          _toolStrip.HighlightTool(Ctrl.Tool.ToString().ToLowerInvariant());
+          break;
+        case nameof(SfxEditorController.StatusMessage):
+          _statusBar.Text = Ctrl.StatusMessage;
+          break;
+        case nameof(SfxEditorController.ZoomLevel):
+        case nameof(SfxEditorController.CellWidth):
+          _pianoRoll.InvalidateMeasure();
+          _propertyStrip.InvalidateMeasure();
+          RefreshVisuals();
+          break;
+        case nameof(SfxEditorController.SfxSlotCount):
+        case nameof(SfxEditorController.NotesPerSfx):
+        case nameof(SfxEditorController.ChannelCount):
+          ApplyProfileLimits();
+          RefreshVisuals();
+          break;
+      }
     };
 
-    private static TextBlock Label(string text) => new()
+    _slotField.LostFocus += (_, _) => CommitSlotField();
+    _slotField.KeyDown += (_, e) =>
     {
-        Text = text,
-        Foreground = new SolidColorBrush(Color.Parse("#CCCCCC")),
-        FontSize = 12,
-        VerticalAlignment = VerticalAlignment.Center,
+      if (e.Key == Key.Enter)
+      {
+        CommitSlotField();
+        e.Handled = true;
+      }
     };
-}
 
-internal sealed class SfxGridCanvas : Control
-{
-    private readonly SfxEditorViewModel _vm;
+    WireCompactField(_speedField, CommitSpeedField);
+    WireCompactField(_loopStartField, CommitLoopStartField);
+    WireCompactField(_loopEndField, CommitLoopEndField);
 
-    private const int CellW = 22;
-    private const int CellH = 16;
-    private const int PitchLabelW = 36;
-    private const int HeaderH = 18;
-
-    private int _hoverStep = -1;
-    private int _hoverPitch = -1;
-    public int PlayheadCol = -1;
-
-    private static readonly Color BgColor = Color.Parse("#0E0E0E");
-    private static readonly Color GridLine = Color.Parse("#1A1A2E");
-    private static readonly Color HeaderBg = Color.Parse("#1E1E1E");
-    private static readonly Color NoteColor = Color.Parse("#FFB347");
-    private static readonly Color NotePlayingColor = Color.Parse("#44FF44");
-    private static readonly Color HoverColor = Color.Parse("#334466");
-    private static readonly Color PlayColor = Color.Parse("#44AA44");
-    private static readonly Color SelectedColor = Color.Parse("#555599");
-
-    private static readonly Typeface Typeface = Typeface.Default;
-
-    public SfxGridCanvas(SfxEditorViewModel vm)
+    _nameBox.TextChanged += (_, _) =>
     {
-        _vm = vm;
-        Width = PitchLabelW + 32 * CellW + 4;
-        Height = HeaderH + SfxEditorViewModel.PitchNames.Count * CellH + 4;
+      if (_syncing) return;
+      Ctrl.SlotName = _nameBox.Text ?? "";
+    };
 
-        PointerPressed += OnPressed;
-        PointerMoved += OnMoved;
-        PointerExited += (_, _) => { _hoverStep = -1; _hoverPitch = -1; InvalidateVisual(); };
-    }
-
-    private void OnPressed(object? sender, PointerPressedEventArgs e)
+    _loopToggle.IsCheckedChanged += (_, _) =>
     {
-        var pos = e.GetPosition(this);
-        var (col, row) = PosToGrid(pos);
-        if (col >= 0 && col < 32 && row >= 0)
-        {
-            int midiNote = 48 + row;
-            if (midiNote <= 108)
-            {
-                _vm.SetNote(col, midiNote);
-                _vm.SelectedStep = col;
-            }
-        }
-    }
+      if (_syncing) return;
+      Ctrl.LoopPlayback = _loopToggle.IsChecked == true;
+    };
 
-    private void OnMoved(object? sender, PointerEventArgs e)
+    _pianoRoll.PianoKeyClicked += midi => Ctrl.PreviewPitch(midi);
+    _pianoRoll.StepHeaderClicked += step => Ctrl.SelectStep(step);
+  }
+
+  private void CommitSlotField()
+  {
+    if (_syncing) return;
+    if (int.TryParse(_slotField.Text, out int slot))
+      Ctrl.SelectedSlot = slot;
+    else
+      SyncSlotField();
+  }
+
+  private void WireCompactField(TextBox field, Action commit)
+  {
+    field.LostFocus += (_, _) => commit();
+    field.KeyDown += (_, e) =>
     {
-        var pos = e.GetPosition(this);
-        var (col, row) = PosToGrid(pos);
-        if (col != _hoverStep || row != _hoverPitch)
-        {
-            _hoverStep = col;
-            _hoverPitch = row;
-            InvalidateVisual();
-        }
-    }
+      if (e.Key == Key.Enter)
+      {
+        commit();
+        e.Handled = true;
+      }
+    };
+  }
 
-    private (int col, int row) PosToGrid(Point pos)
+  private void CommitSpeedField()
+  {
+    if (_syncing) return;
+    if (TryParseSpeed(_speedField.Text, out int speed))
+      Ctrl.Speed = speed;
+    else
+      SyncSpeedField();
+  }
+
+  private void CommitLoopStartField()
+  {
+    if (_syncing) return;
+    if (TryParseStepHex(_loopStartField.Text, Ctrl.NotesPerSfx, out int step))
+      Ctrl.LoopStart = step;
+    else
+      SyncLoopFields();
+  }
+
+  private void CommitLoopEndField()
+  {
+    if (_syncing) return;
+    if (TryParseStepHex(_loopEndField.Text, Ctrl.NotesPerSfx, out int step))
+      Ctrl.LoopEnd = step;
+    else
+      SyncLoopFields();
+  }
+
+  private static bool TryParseStepHex(string? text, int notesPerSfx, out int step)
+  {
+    step = 0;
+    if (string.IsNullOrWhiteSpace(text)) return false;
+    text = text.Trim();
+    if (int.TryParse(text, System.Globalization.NumberStyles.HexNumber, null, out step))
+      return step >= 0 && step < notesPerSfx;
+    return int.TryParse(text, out step) && step >= 0 && step < notesPerSfx;
+  }
+
+  private static bool TryParseSpeed(string? text, out int speed)
+  {
+    speed = 0;
+    if (string.IsNullOrWhiteSpace(text)) return false;
+    text = text.Trim();
+    if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+      return int.TryParse(text[2..], System.Globalization.NumberStyles.HexNumber, null, out speed)
+             && speed is >= 1 and <= 255;
+    return int.TryParse(text, out speed) && speed is >= 1 and <= 255;
+  }
+
+  private void SyncSlotField()
+  {
+    _slotField.Text = Ctrl.SelectedSlot.ToString("D2");
+    _slotHex.Text = $"/ 0x{Ctrl.SelectedSlot:X2}";
+  }
+
+  private void SyncSpeedField() => _speedField.Text = Ctrl.Speed.ToString();
+
+  private void SyncLoopFields()
+  {
+    _loopStartField.Text = Ctrl.LoopStart.ToString("X2");
+    _loopEndField.Text = Ctrl.LoopEnd.ToString("X2");
+  }
+
+  private void SyncControls()
+  {
+    _syncing = true;
+    try
     {
-        if (pos.X < PitchLabelW || pos.Y < HeaderH)
-            return (-1, -1);
-        int col = (int)((pos.X - PitchLabelW) / CellW);
-        int row = (int)((pos.Y - HeaderH) / CellH);
-        return (col, row);
+      SyncSlotField();
+      _nameBox.Text = Ctrl.SlotName;
+      SyncSpeedField();
+      SyncLoopFields();
+      _loopToggle.IsChecked = Ctrl.LoopPlayback;
+      _statusBar.Text = Ctrl.StatusMessage;
     }
-
-    public override void Render(DrawingContext ctx)
+    finally
     {
-        base.Render(ctx);
-        var pitchNames = SfxEditorViewModel.PitchNames;
-        int totalCols = 32;
-        int totalRows = pitchNames.Count;
-        int w = PitchLabelW + totalCols * CellW;
-        int h = HeaderH + totalRows * CellH;
-
-        ctx.FillRectangle(new SolidColorBrush(HeaderBg), new Rect(0, 0, w, HeaderH));
-
-        for (int c = 0; c < totalCols; c++)
-        {
-            string label = c.ToString("X").PadLeft(2, '0');
-            double x = PitchLabelW + c * CellW + 2;
-            var ft = new FormattedText(label, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 9, null);
-            ctx.DrawText(ft, new Point(x, 2));
-        }
-
-        for (int r = 0; r < totalRows; r++)
-        {
-            double y = HeaderH + r * CellH;
-            string pitchName = pitchNames[r];
-
-            var pft = new FormattedText(pitchName, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 9, null);
-            ctx.DrawText(pft, new Point(2, y + 1));
-
-            bool isOctaveStart = pitchName.Contains('C') && (pitchName.EndsWith("4") || pitchName.EndsWith("5") || pitchName.EndsWith("6") || pitchName.EndsWith("7") || pitchName.EndsWith("8"));
-
-            for (int c = 0; c < totalCols; c++)
-            {
-                double x = PitchLabelW + c * CellW;
-                var cellRect = new Rect(x, y, CellW, CellH);
-
-                bool hasNote = _vm.HasNoteAt(c, 48 + r);
-                bool isHover = c == _hoverStep && r == _hoverPitch;
-                bool isPlayhead = c == PlayheadCol;
-
-                Color cellColor = BgColor;
-                if (isPlayhead && hasNote)
-                    cellColor = NotePlayingColor;
-                else if (isPlayhead)
-                    cellColor = Color.FromArgb(60, 68, 170, 68);
-                else if (isHover)
-                    cellColor = HoverColor;
-                else if (hasNote)
-                    cellColor = NoteColor;
-                else if (isOctaveStart)
-                    cellColor = Color.FromArgb(15, 255, 255, 255);
-
-                ctx.FillRectangle(new SolidColorBrush(cellColor), cellRect);
-
-                ctx.DrawLine(new Pen(new SolidColorBrush(GridLine), 0.3), new Point(x, y), new Point(x + CellW, y));
-                ctx.DrawLine(new Pen(new SolidColorBrush(GridLine), 0.3), new Point(x, y), new Point(x, y + CellH));
-            }
-        }
-
-        ctx.DrawLine(new Pen(new SolidColorBrush(GridLine), 0.5), new Point(0, h - 1), new Point(w, h - 1));
-        ctx.DrawLine(new Pen(new SolidColorBrush(GridLine), 0.5), new Point(w - 1, 0), new Point(w - 1, h));
+      _syncing = false;
     }
+  }
+
+  private void RefreshVisuals()
+  {
+    _pianoRoll.InvalidateVisual();
+    _propertyStrip.InvalidateVisual();
+    _statusBar.Text = Ctrl.StatusMessage;
+  }
+
+  private Control BuildLayout()
+  {
+    _rollScroll.Content = _pianoRoll;
+    _rollScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+    _rollScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+
+    _stripScroll.Content = _propertyStrip;
+    _stripScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+    _stripScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+    _stripScroll.Height = 62;
+
+    _rollScroll.ScrollChanged += (_, _) =>
+    {
+      if (Math.Abs(_stripScroll.Offset.X - _rollScroll.Offset.X) > 0.5)
+        _stripScroll.Offset = _stripScroll.Offset.WithX(_rollScroll.Offset.X);
+    };
+    _stripScroll.ScrollChanged += (_, _) =>
+    {
+      if (Math.Abs(_rollScroll.Offset.X - _stripScroll.Offset.X) > 0.5)
+        _rollScroll.Offset = _rollScroll.Offset.WithX(_stripScroll.Offset.X);
+    };
+
+    _statusBar.Text = Ctrl.StatusMessage;
+
+    var toolbar = new ScrollViewer
+    {
+      HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+      VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+      Content = BuildToolbarPanel(),
+    };
+    BuildToolStrip();
+
+    var editorPanel = new Grid
+    {
+      RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto,Auto"),
+    };
+
+    Grid.SetRow(toolbar, 0);
+    Grid.SetRow(_rollScroll, 1);
+    Grid.SetRow(_toolStrip, 2);
+    Grid.SetRow(_stripScroll, 3);
+    Grid.SetRow(_statusBar, 4);
+
+    editorPanel.Children.Add(toolbar);
+    editorPanel.Children.Add(_rollScroll);
+    editorPanel.Children.Add(_toolStrip);
+    editorPanel.Children.Add(_stripScroll);
+    editorPanel.Children.Add(_statusBar);
+
+    var outer = new Grid
+    {
+      ColumnDefinitions = new ColumnDefinitions("180,*"),
+    };
+
+    Grid.SetColumn(_inspector, 0);
+    Grid.SetColumn(editorPanel, 1);
+    outer.Children.Add(_inspector);
+    outer.Children.Add(editorPanel);
+
+    EditorKeyboardRouting.PreventFocusSteal(outer);
+    outer.PointerPressed += (_, e) =>
+    {
+      if (EditorKeyboardRouting.IsEditableChromeTarget(e.Source))
+        return;
+      Focus();
+    };
+
+    return outer;
+  }
+
+  private Control BuildToolbarPanel()
+  {
+    var slotPanel = new StackPanel
+    {
+      Orientation = Orientation.Horizontal,
+      Spacing = 4,
+      VerticalAlignment = VerticalAlignment.Center,
+      Children =
+      {
+        MakeBtn("\u25C0", "Previous slot (Q)", () => Ctrl.SelectedSlot--),
+        _slotField,
+        _slotHex,
+        MakeBtn("\u25B6", "Next slot (W)", () => Ctrl.SelectedSlot++),
+      },
+    };
+
+    return new StackPanel
+    {
+      Orientation = Orientation.Horizontal,
+      Spacing = 6,
+      Margin = new Thickness(0, 0, 0, 4),
+      Children =
+      {
+        slotPanel,
+        Label("Name:"),
+        _nameBox,
+        Sep(),
+        MakeIconBtn(SfxToolIcons.CreatePlayIcon(), "Play (Space)", () => Ctrl.TogglePlayStop()),
+        MakeIconBtn(SfxToolIcons.CreateStopIcon(), "Stop (Esc)", () => Ctrl.Stop()),
+        _loopToggle,
+        Sep(),
+        DelayLabel(),
+        _speedField,
+        Sep(),
+        Label("Loop:"),
+        _loopStartField,
+        _loopDash,
+        _loopEndField,
+        Sep(),
+        MakeBtn("Clear", "Clear slot", () => Ctrl.ClearSlot()),
+        MakeBtn("Undo", "Undo", () => Ctrl.Undo.Undo()),
+        MakeBtn("Redo", "Redo", () => Ctrl.Undo.Redo()),
+        Sep(),
+        MakeBtn("-", "Zoom out", () => Ctrl.ZoomLevel--),
+        MakeBtn("+", "Zoom in", () => Ctrl.ZoomLevel++),
+      },
+    };
+  }
+
+  private void BuildToolStrip()
+  {
+    _toolStrip.SetTools(
+      new (string, string?, Func<Control>?)[]
+      {
+        ("pencil", "P", SfxToolIcons.CreatePencilIcon),
+        ("eraser", "E", SfxToolIcons.CreateEraserIcon),
+        ("select", "S", SfxToolIcons.CreateSelectIcon),
+        ("fill", "F", SfxToolIcons.CreateFillIcon),
+      },
+      Ctrl.Tool.ToString().ToLowerInvariant());
+
+    _toolStrip.ToolSelected += id =>
+    {
+      Ctrl.Tool = id switch
+      {
+        "eraser" => SfxEditorTool.Eraser,
+        "select" => SfxEditorTool.Select,
+        "fill" => SfxEditorTool.Fill,
+        _ => SfxEditorTool.Pencil,
+      };
+    };
+  }
+
+  private void OnKeyDown(object? sender, KeyEventArgs e)
+  {
+    if (EditorKeyboardRouting.ShouldDeferToFocusedTextInput(this))
+      return;
+    if (Ctrl.HandleKey(e.Key.ToString(), e.KeyModifiers.HasFlag(KeyModifiers.Control),
+        e.KeyModifiers.HasFlag(KeyModifiers.Shift), e.KeyModifiers.HasFlag(KeyModifiers.Alt)))
+      e.Handled = true;
+  }
+
+  private void OnKeyUp(object? sender, KeyEventArgs e) { }
+
+  private void OnTextInput(object? sender, TextInputEventArgs e)
+  {
+    if (EditorKeyboardRouting.ShouldDeferToFocusedTextInput(this))
+      return;
+    if (!string.IsNullOrEmpty(e.Text) && Ctrl.HandleTextInput(e.Text))
+      e.Handled = true;
+  }
+
+  private static TextBox CreateCompactField(int width, int maxLength, bool monospace = true) => new()
+  {
+    Width = width,
+    MinWidth = width,
+    MaxLength = maxLength,
+    MinHeight = 22,
+    Height = 22,
+    FontFamily = monospace
+      ? new FontFamily("Consolas,Courier New,monospace")
+      : FontFamily.Default,
+    FontSize = 11,
+    Padding = new Thickness(4, 0),
+    TextAlignment = TextAlignment.Center,
+    VerticalContentAlignment = VerticalAlignment.Center,
+    HorizontalContentAlignment = HorizontalAlignment.Center,
+  };
+
+  private static Button MakeIconBtn(Control icon, string tip, Action onClick)
+  {
+    var btn = new Button
+    {
+      Content = icon,
+      Padding = new Thickness(6, 2),
+      Focusable = false,
+    };
+    ToolTip.SetTip(btn, tip);
+    btn.Click += (_, _) => onClick();
+    return btn;
+  }
+
+  private static Button MakeBtn(string content, string tip, Action onClick)
+  {
+    var btn = new Button
+    {
+      Content = content,
+      Padding = new Thickness(8, 2),
+      Focusable = false,
+    };
+    ToolTip.SetTip(btn, tip);
+    btn.Click += (_, _) => onClick();
+    return btn;
+  }
+
+  private static Border Sep() => new()
+  {
+    Width = 1,
+    Height = 20,
+    Background = new SolidColorBrush(Color.Parse("#3A3A3A")),
+    Margin = new Thickness(2, 0),
+  };
+
+  private static TextBlock DelayLabel()
+  {
+    var label = Label("Delay:");
+    ToolTip.SetTip(label,
+      "Pico-8 spd — frames per step (1–255). Higher = slower. Default 4.");
+    return label;
+  }
+
+  private static TextBlock Label(string text) => new()
+  {
+    Text = text,
+    Foreground = Brushes.LightGray,
+    FontSize = 12,
+    VerticalAlignment = VerticalAlignment.Center,
+  };
 }

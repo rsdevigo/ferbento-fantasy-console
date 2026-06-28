@@ -21,6 +21,14 @@ public static class SystemApi
                     ctx.Bus.Sound.Engine.Channels[n - 16].IsPlaying ? 1 : 0),
                 >= 20 and <= 23 => ScriptValue.Number(
                     ctx.Bus.Sound.Engine.Channels[n - 20].CurrentNoteIndex),
+                >= 46 and <= 49 => ScriptValue.Number(
+                    ctx.Bus.Sound.Engine.StatSfxOnChannel(n - 46)),
+                >= 50 and <= 53 => ScriptValue.Number(
+                    ctx.Bus.Sound.Engine.StatNoteOnChannel(n - 50)),
+                54 => ScriptValue.Number(ctx.Bus.Sound.Engine.StatCurrentPattern()),
+                55 => ScriptValue.Number(ctx.Bus.Sound.Engine.StatTotalPatterns()),
+                56 => ScriptValue.Number(ctx.Bus.Sound.Engine.StatTicksOnPattern()),
+                57 => ScriptValue.Number(ctx.Bus.Sound.Engine.StatMusicPlaying() ? 1 : 0),
                 _ => ScriptValue.Number(0)
             };
         }));

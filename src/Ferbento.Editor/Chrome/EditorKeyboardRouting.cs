@@ -37,4 +37,33 @@ public static class EditorKeyboardRouting
                 control.Focusable = false;
         }
     }
+
+    /// <summary>
+    /// Returns true when a text field has focus — editor shortcut handlers should not consume input.
+    /// </summary>
+    public static bool ShouldDeferToFocusedTextInput(InputElement editorRoot)
+    {
+        var focused = TopLevel.GetTopLevel(editorRoot)?.FocusManager?.GetFocusedElement();
+        if (focused is TextBox or NumericUpDown or ComboBox)
+            return true;
+        if (focused is Visual visual)
+        {
+            return visual.FindAncestorOfType<TextBox>() != null
+                || visual.FindAncestorOfType<NumericUpDown>() != null;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// True when the pointer target is inside an editable chrome control.
+    /// </summary>
+    public static bool IsEditableChromeTarget(object? source)
+    {
+        if (source is not Visual visual)
+            return false;
+        return visual.FindAncestorOfType<TextBox>() != null
+            || visual.FindAncestorOfType<NumericUpDown>() != null
+            || visual.FindAncestorOfType<ComboBox>() != null;
+    }
 }

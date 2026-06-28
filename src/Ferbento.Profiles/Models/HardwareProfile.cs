@@ -27,7 +27,7 @@ public sealed class HardwareProfile
             CartRom = 32768,
             MapLayout = new MapMemoryLayout { MapPrimaryRows = 32 },
         },
-        Audio = new AudioSpec { Channels = 4, SfxSlots = 64, MusicPatterns = 64, SampleRate = 22050 },
+        Audio = new AudioSpec { Channels = 4, SfxSlots = 64, MusicPatterns = 64, NotesPerSfx = 32, SampleRate = 22050 },
         Code = new CodeSpec { MaxTokens = 8192 },
         Cartridge = new CartridgeSpec { MaxBytes = 32768 }
     };
@@ -74,6 +74,7 @@ public sealed class AudioSpec
     public int Channels { get; set; } = 4;
     public int SfxSlots { get; set; } = 64;
     public int MusicPatterns { get; set; } = 64;
+    public int NotesPerSfx { get; set; } = 32;
     public int SampleRate { get; set; } = 22050;
 }
 

@@ -41,7 +41,7 @@ public static class BuiltInProfiles
             CartRom = 32768,
             MapLayout = new MapMemoryLayout { MapPrimaryRows = 32 },
         },
-        Audio = new AudioSpec { Channels = 4, SfxSlots = 64, MusicPatterns = 64, SampleRate = 22050 },
+        Audio = new AudioSpec { Channels = 4, SfxSlots = 64, MusicPatterns = 64, NotesPerSfx = 32, SampleRate = 22050 },
         Code = new CodeSpec { MaxTokens = 8192 },
         Cartridge = new CartridgeSpec { MaxBytes = 32768 }
     };
@@ -59,7 +59,7 @@ public static class BuiltInProfiles
         Sprites = new SpriteSpec { SheetWidth = 128, SheetHeight = 128, TileSize = 8, MaxOnScreen = 40 },
         Map = new MapSpec { Width = 32, Height = 32, TileSize = 8 },
         Memory = new MemorySpec { Ram = 8192, CartRom = 32768 },
-        Audio = new AudioSpec { Channels = 4, SfxSlots = 32, MusicPatterns = 32, SampleRate = 44100 },
+        Audio = new AudioSpec { Channels = 4, SfxSlots = 32, MusicPatterns = 32, NotesPerSfx = 32, SampleRate = 44100 },
         Code = new CodeSpec { MaxTokens = 4096 },
         Cartridge = new CartridgeSpec { MaxBytes = 262144 }
     };
@@ -72,7 +72,7 @@ public static class BuiltInProfiles
         Sprites = new SpriteSpec { SheetWidth = 128, SheetHeight = 256, TileSize = 8, MaxOnScreen = 40 },
         Map = new MapSpec { Width = 32, Height = 32, TileSize = 8 },
         Memory = new MemorySpec { Ram = 32768, CartRom = 1048576 },
-        Audio = new AudioSpec { Channels = 4, SfxSlots = 32, MusicPatterns = 32, SampleRate = 44100 },
+        Audio = new AudioSpec { Channels = 4, SfxSlots = 32, MusicPatterns = 32, NotesPerSfx = 32, SampleRate = 44100 },
         Code = new CodeSpec { MaxTokens = 4096 },
         Cartridge = new CartridgeSpec { MaxBytes = 2097152 }
     };
@@ -85,7 +85,7 @@ public static class BuiltInProfiles
         Sprites = new SpriteSpec { SheetWidth = 128, SheetHeight = 128, TileSize = 8, MaxOnScreen = 64 },
         Map = new MapSpec { Width = 64, Height = 64, TileSize = 8 },
         Memory = new MemorySpec { Ram = 2048, CartRom = 262144 },
-        Audio = new AudioSpec { Channels = 5, SfxSlots = 32, MusicPatterns = 32, SampleRate = 44100 },
+        Audio = new AudioSpec { Channels = 5, SfxSlots = 32, MusicPatterns = 32, NotesPerSfx = 32, SampleRate = 44100 },
         Code = new CodeSpec { MaxTokens = 4096 },
         Cartridge = new CartridgeSpec { MaxBytes = 524288 }
     };
@@ -98,7 +98,7 @@ public static class BuiltInProfiles
         Sprites = new SpriteSpec { SheetWidth = 256, SheetHeight = 256, TileSize = 16, MaxOnScreen = 128 },
         Map = new MapSpec { Width = 64, Height = 64, TileSize = 16 },
         Memory = new MemorySpec { Ram = 131072, CartRom = 4194304 },
-        Audio = new AudioSpec { Channels = 8, SfxSlots = 64, MusicPatterns = 64, SampleRate = 44100 },
+        Audio = new AudioSpec { Channels = 8, SfxSlots = 64, MusicPatterns = 64, NotesPerSfx = 32, SampleRate = 44100 },
         Code = new CodeSpec { MaxTokens = 8192 },
         Cartridge = new CartridgeSpec { MaxBytes = 8388608 }
     };
@@ -111,7 +111,7 @@ public static class BuiltInProfiles
         Sprites = new SpriteSpec { SheetWidth = 256, SheetHeight = 256, TileSize = 8, MaxOnScreen = 80 },
         Map = new MapSpec { Width = 64, Height = 64, TileSize = 8 },
         Memory = new MemorySpec { Ram = 65536, CartRom = 4194304 },
-        Audio = new AudioSpec { Channels = 6, SfxSlots = 64, MusicPatterns = 64, SampleRate = 44100 },
+        Audio = new AudioSpec { Channels = 6, SfxSlots = 64, MusicPatterns = 64, NotesPerSfx = 32, SampleRate = 44100 },
         Code = new CodeSpec { MaxTokens = 8192 },
         Cartridge = new CartridgeSpec { MaxBytes = 8388608 }
     };

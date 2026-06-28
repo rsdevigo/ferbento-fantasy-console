@@ -23,9 +23,18 @@ public static class MemoryMap
     public const int SongEnd = 0x31FF;
 
     public const int SfxStart = 0x3200;
-    public const int SfxEnd = 0x41FF;
+    public const int SfxEnd = 0x42FF;
 
-    public const int UserDataStart = 0x4200;
+    public const int SfxHeaderBytes = 4;
+    public const int DefaultNotesPerSfx = 32;
+    public const int Pico8SfxSlotBytes = DefaultNotesPerSfx * 2 + SfxHeaderBytes;
+
+    public static int SfxSlotBytes(int notesPerSfx) => notesPerSfx * 2 + SfxHeaderBytes;
+
+    public static int SfxRegionEnd(int notesPerSfx, int sfxSlots) =>
+        SfxStart + SfxSlotBytes(notesPerSfx) * sfxSlots - 1;
+
+    public const int UserDataStart = 0x4300;
     public const int UserDataEnd = 0x4FFF;
 
     public const int CartDataStart = 0x5E00;

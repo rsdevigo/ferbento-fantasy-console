@@ -154,6 +154,8 @@ public sealed class ProfileValidator
             AddError(r, "Audio.MusicPatterns must be between 1 and 256");
         if (p.Audio.SampleRate < 8000 || p.Audio.SampleRate > 192_000)
             AddError(r, "Audio.SampleRate must be between 8000 and 192000");
+        if (p.Audio.NotesPerSfx < 1 || p.Audio.NotesPerSfx > 128)
+            AddError(r, "Audio.NotesPerSfx must be between 1 and 128");
     }
 
     private static void ValidateCode(HardwareProfile p, ProfileValidationResult r)

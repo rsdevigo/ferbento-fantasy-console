@@ -34,4 +34,8 @@ public sealed class ProfileFeatureGate
     public bool UsesHexOverlay => true;
 
     public bool RequiresVirtualizedCanvas => Profile.Map.Width * Profile.Map.Height > 4096;
+
+    public int AudioNotesPerSfx => Profile.Audio.NotesPerSfx;
+
+    public int AudioChannelCount => Profile.Audio.Channels;
 }

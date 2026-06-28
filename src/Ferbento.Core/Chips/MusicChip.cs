@@ -18,12 +18,12 @@ public sealed class MusicChip : IChip
 
     public void Tick() { }
 
-    public void Music(int pattern = -1, int fade = 0, int channelMask = 15)
+    public void Music(int pattern = -1, int fade = 0, int channelMask = -1)
     {
         if (pattern < 0)
-            _bus.Sound.Engine.StopMusic();
+            _bus.Sound.Engine.StopMusic(fade);
         else
-            _bus.Sound.Engine.PlayMusic(pattern, fade, channelMask);
+            _bus.Sound.Engine.PlayMusic(pattern, fade, channelMask < 0 ? DefaultChannelMask() : channelMask);
     }
 
     public void SetMusicPattern(int patternIndex, int[] patternData)
@@ -31,25 +31,23 @@ public sealed class MusicChip : IChip
         _bus.Sound.Engine.SetMusicPattern(patternIndex, patternData);
     }
 
-    public int[] GetMusicPattern(int patternIndex)
-    {
-        return _bus.Sound.Engine.GetMusicPattern(patternIndex);
-    }
+    public int[] GetMusicPattern(int patternIndex) =>
+        _bus.Sound.Engine.GetMusicPattern(patternIndex);
 
-    public void SetMusicLoop(int start, int end)
-    {
+    public void SetSongPattern(int patternIndex, SongPattern pattern) =>
+        _bus.Sound.Engine.WriteSongPattern(patternIndex, pattern);
+
+    public SongPattern GetSongPattern(int patternIndex) =>
+        _bus.Sound.Engine.ReadSongPattern(patternIndex);
+
+    public void SetMusicLoop(int start, int end) =>
         _bus.Sound.Engine.SetMusicLoop(start, end);
-    }
 
-    public void SetMusicSpeed(int speed)
-    {
+    public void SetMusicSpeed(int speed) =>
         _bus.Sound.Engine.SetMusicSpeed(speed);
-    }
 
-    public void SetMusicRepeat(bool repeat)
-    {
+    public void SetMusicRepeat(bool repeat) =>
         _bus.Sound.Engine.SetMusicRepeat(repeat);
-    }
 
     public int PatternCount => _patternCount;
     public int RowsPerPattern => _bus.Sound.Engine.MusicRowsPerPattern;
@@ -64,4 +62,6 @@ public sealed class MusicChip : IChip
             mask |= 1 << i;
         return mask;
     }
+
+    private int DefaultChannelMask() => ChannelMask(_bus.Profile.Audio.Channels);
 }
