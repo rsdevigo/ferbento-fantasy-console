@@ -60,6 +60,19 @@ public sealed class SfxPropertyStrip : Control
   {
     var note = _ctrl!.GetNote(step);
     if (note.IsEmpty) return;
+    if (note.CustomInst)
+    {
+      var ft = new FormattedText(
+        note.Instrument.ToString(CultureInfo.InvariantCulture),
+        CultureInfo.InvariantCulture,
+        FlowDirection.LeftToRight,
+        Typeface.Default,
+        9,
+        new SolidColorBrush(SfxTheme.CustomInstAccent));
+      ctx.DrawText(ft, new Point(rect.X + (rect.Width - ft.Width) / 2, rect.Y + 3));
+      return;
+    }
+
     SfxWaveformDrawing.Draw(ctx, rect, note.Instrument, SfxTheme.WaveformColor(note));
   }
 

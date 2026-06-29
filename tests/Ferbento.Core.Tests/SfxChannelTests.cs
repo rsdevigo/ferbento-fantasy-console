@@ -34,6 +34,7 @@ public class SfxTypesTests
 
         var read = SfxCodec.ReadNotes(mem, layout, 3);
         var header = SfxCodec.ReadHeader(mem, layout, 3);
+        int headerAddr = layout.SfxSlotAddress(3) + layout.NotesPerSfx * 2;
 
         Assert.Equal(24, read[0].Pitch);
         Assert.Equal(6, header.speed);
@@ -41,6 +42,19 @@ public class SfxTypesTests
         Assert.Equal(8, header.loopEnd);
         Assert.True((header.filters & SfxFilters.Buzz) != 0);
         Assert.True((header.filters & SfxFilters.Reverb) != 0);
+        Assert.Equal(28, mem.Peek(headerAddr));
+        Assert.Equal(6, mem.Peek(headerAddr + 1));
+        Assert.Equal(1, mem.Peek(headerAddr + 2));
+        Assert.Equal(8, mem.Peek(headerAddr + 3));
+    }
+
+    [Fact]
+    public void Pico8SfxHeader_RoundTripsFilterByte()
+    {
+        var filters = SfxFilters.Noiz | SfxFilters.Detune1 | SfxFilters.Dampen;
+        byte encoded = Pico8SfxHeader.EncodeFilterByte(filters);
+        var decoded = Pico8SfxHeader.DecodeFilterByte(encoded);
+        Assert.Equal(filters, decoded);
     }
 
     [Fact]
@@ -137,6 +151,26 @@ public class SfxChannelTests
     }
 
     [Fact]
+    public void SlideEffect_GlidesFromPreviousPitch()
+    {
+        var ch = new SfxChannel(0, sampleRate: 60);
+        ch.SetSpeed(4);
+        ch.SetNote(0, new SfxNote(40, 2, 7));
+        ch.SetNote(1, new SfxNote(52, 2, 7, SfxEffect.Slide));
+        ch.SetLoop(0, 1);
+        ch.Play(0);
+        ch.FlushCommands();
+
+        float start = ch.NextSample();
+        for (int i = 0; i < 30; i++)
+            ch.NextSample();
+        float later = ch.NextSample();
+
+        Assert.NotEqual(0f, start);
+        Assert.NotEqual(0f, later);
+    }
+
+    [Fact]
     public void BuzzFilter_ModifiesWaveform()
     {
         var plain = new SfxChannel(0, 22050);
@@ -193,6 +227,20 @@ public class SfxChannelTests
 
 public class AudioEngineTests
 {
+    [Fact]
+    public void SetSlot_PreservesEffectParamInCache()
+    {
+        using var engine = CreateEngine();
+        var notes = new SfxNote[32];
+        const int param = (30 << 8) | 8;
+        notes[0] = new SfxNote(40, 2, 7, SfxEffect.Vibrato, param);
+        engine.SetSlot(0, notes, 4, 0, 31);
+
+        var read = engine.GetSlot(0);
+        Assert.Equal(SfxEffect.Vibrato, read[0].Effect);
+        Assert.Equal(param, read[0].EffectParam);
+    }
+
     [Fact]
     public void StopMusic_silences_all_channels()
     {

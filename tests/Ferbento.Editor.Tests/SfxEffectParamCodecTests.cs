@@ -23,4 +23,11 @@ public class SfxEffectParamCodecTests
     Assert.Equal(4, o1);
     Assert.Equal(7, o2);
   }
+
+  [Fact]
+  public void DefaultParam_ReturnsUsableValues()
+  {
+    Assert.True(SfxEffectParamCodec.DefaultParam(SfxEffect.Vibrato) > 0);
+    Assert.True(SfxEffectParamCodec.DefaultParam(SfxEffect.Arpeggio) > 0);
+  }
 }

@@ -59,7 +59,9 @@
         "channels":      { "type": "integer", "minimum": 1, "maximum": 16 },
         "sfxSlots":      { "type": "integer", "minimum": 1, "maximum": 256 },
         "musicPatterns": { "type": "integer", "minimum": 1, "maximum": 256 },
-        "sampleRate":    { "type": "integer", "minimum": 8000, "maximum": 192000 }
+        "sampleRate":    { "type": "integer", "minimum": 8000, "maximum": 192000 },
+        "sfxOctaveMin":  { "type": "integer", "minimum": 0, "maximum": 5 },
+        "sfxOctaveMax":  { "type": "integer", "minimum": 1, "maximum": 5 }
       }
     },
     "code": {

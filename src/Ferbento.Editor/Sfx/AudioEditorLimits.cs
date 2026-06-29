@@ -24,4 +24,13 @@ public sealed class AudioEditorLimits
         var layout = AudioMemoryLayout.FromProfile(profile);
         return new AudioEditorLimits(layout.NotesPerSfx, layout.SfxSlots, layout.Channels);
     }
+
+    public static void ApplySfxPitchRange(HardwareProfile profile)
+    {
+        int minOct = Math.Clamp(profile.Audio.SfxOctaveMin, 0, 5);
+        int maxOct = Math.Clamp(profile.Audio.SfxOctaveMax, 1, 5);
+        if (minOct >= maxOct)
+            maxOct = Math.Min(5, minOct + 1);
+        SfxPitch.SetOctaveRange(minOct, maxOct);
+    }
 }

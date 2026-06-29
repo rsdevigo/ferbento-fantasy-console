@@ -46,6 +46,7 @@ public enum SfxEditorAction
   Waveform8,
   CycleEffect,
   CycleEffectBack,
+  ToggleCustomInst,
 }
 
 public static class SfxEditorInputMap
@@ -97,6 +98,7 @@ public static class SfxEditorInputMap
       [SfxEditorAction.Waveform8] = "D8",
       [SfxEditorAction.CycleEffect] = "X",
       [SfxEditorAction.CycleEffectBack] = "X, Shift",
+      [SfxEditorAction.ToggleCustomInst] = "I",
     };
 
   public static bool Matches(string key, bool ctrl, bool shift, bool alt, SfxEditorAction action)

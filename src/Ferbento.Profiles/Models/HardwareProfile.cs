@@ -76,6 +76,10 @@ public sealed class AudioSpec
     public int MusicPatterns { get; set; } = 64;
     public int NotesPerSfx { get; set; } = 32;
     public int SampleRate { get; set; } = 22050;
+    /// <summary>Lowest octave visible in the SFX piano roll (Pico-8 pitch 0–63).</summary>
+    public int SfxOctaveMin { get; set; } = 0;
+    /// <summary>Highest octave visible in the SFX piano roll (Pico-8 pitch 0–63).</summary>
+    public int SfxOctaveMax { get; set; } = 5;
 }
 
 public sealed class CodeSpec

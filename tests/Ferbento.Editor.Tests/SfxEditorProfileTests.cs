@@ -117,6 +117,70 @@ public class SfxEditorProfileTests
     }
 
     [Fact]
+    public void SetProfile_CustomOctaveRange_UpdatesPianoRollRange()
+    {
+        var profile = BuiltInProfiles.Pico8();
+        profile.Audio.SfxOctaveMin = 2;
+        profile.Audio.SfxOctaveMax = 4;
+
+        var ctrl = new SfxEditorController();
+        ctrl.SetProfile(profile);
+
+        Assert.Equal(2, SfxPitch.MinOctaveFromView());
+        Assert.Equal(4, SfxPitch.MaxOctaveFromView());
+    }
+
+    [Fact]
+    public void SlotColor_DefaultsBySlotIndex()
+    {
+        var ctrl = new SfxEditorController();
+        ctrl.SetProfile(BuiltInProfiles.Pico8());
+
+        Assert.Equal(SfxSlotColors.DefaultIndex(0), ctrl.GetSlotColor(0));
+        Assert.Equal(SfxSlotColors.DefaultIndex(3), ctrl.GetSlotColor(3));
+    }
+
+    [Fact]
+    public void SlotColor_ExportImportRoundTrip()
+    {
+        var ctrl = new SfxEditorController();
+        ctrl.SetProfile(BuiltInProfiles.Pico8());
+        ctrl.SelectedSlot = 5;
+        ctrl.SlotColor = 9;
+        ctrl.SlotName = "kick";
+
+        var data = ctrl.ExportProjectData();
+        var other = new SfxEditorController();
+        other.SetProfile(BuiltInProfiles.Pico8());
+        other.ImportProjectData(data);
+
+        Assert.Equal(9, other.GetSlotColor(5));
+        other.SelectedSlot = 5;
+        Assert.Equal("kick", other.SlotName);
+    }
+
+    [Fact]
+    public void CustomInst_PlaceNoteAndExport_RoundTrip()
+    {
+        var ctrl = new SfxEditorController();
+        ctrl.SetProfile(BuiltInProfiles.Pico8());
+        ctrl.DefaultCustomInst = true;
+        ctrl.DefaultWaveform = 3;
+        ctrl.PlaceNote(0, 20, preview: false);
+
+        var note = ctrl.GetNote(0);
+        Assert.True(note.CustomInst);
+        Assert.Equal(3, note.Instrument);
+
+        var data = ctrl.ExportProjectData();
+        data.WaveformInstrumentSlots = [false, false, true, false, false, false, false, false];
+        var other = new SfxEditorController();
+        other.SetProfile(BuiltInProfiles.Pico8());
+        other.ImportProjectData(data);
+        Assert.True(other.GetWaveformInstrumentSlot(2));
+    }
+
+    [Fact]
     public void AudioEditorLimits_FromProfile_MatchesMemoryLayout()
     {
         var limits = AudioEditorLimits.FromProfile(BuiltInProfiles.Nes());

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -18,6 +19,8 @@ public sealed class SfxInspectorPanel : UserControl
     Margin = new Thickness(0, 4),
   };
   private readonly WrapPanel _waveformGrid = new() { Orientation = Orientation.Horizontal };
+  private readonly CheckBox _customInstCheck = new() { Content = "Custom SFX", FontSize = 10 };
+  private readonly TextBlock _waveformHeader = SectionHeader("WAVEFORM");
   private readonly Slider _volumeSlider = new() { Minimum = 0, Maximum = 7, Width = 110 };
   private readonly TextBlock _volumeValue = new() { FontSize = 10, Foreground = Brushes.LightGray, MinWidth = 12 };
   private readonly ComboBox _effectCombo = new() { Width = 130, MaxDropDownHeight = 220 };
@@ -51,6 +54,9 @@ public sealed class SfxInspectorPanel : UserControl
     _previewStop.Content = SfxToolIcons.CreateStopIcon();
     ToolTip.SetTip(_previewChannel,
       "Audio channel used only for preview playback in the editor (not saved in the SFX).");
+    ToolTip.SetTip(_effectCombo, "Effect applied to each new note (per-note in the grid).");
+    ToolTip.SetTip(_customInstCheck,
+      "Use SFX slots 0–7 as instruments (Pico-8 custom instrument). Keys 1–8 pick the slot; I toggles.");
   }
 
   public void Bind(SfxEditorController controller)
@@ -65,6 +71,7 @@ public sealed class SfxInspectorPanel : UserControl
           or nameof(SfxEditorController.DefaultVolume)
           or nameof(SfxEditorController.DefaultEffect)
           or nameof(SfxEditorController.DefaultEffectParam)
+          or nameof(SfxEditorController.DefaultCustomInst)
           or nameof(SfxEditorController.Filters)
           or nameof(SfxEditorController.Speed)
           or nameof(SfxEditorController.SelectedChannel)
@@ -72,18 +79,15 @@ public sealed class SfxInspectorPanel : UserControl
           or nameof(SfxEditorController.Document))
         SyncFromController();
     };
-    controller.RefreshRequested += () =>
-    {
-      _envelope.InvalidateVisual();
-      SyncFromController();
-    };
+    controller.RefreshRequested += () => _envelope.InvalidateVisual();
   }
 
   private Control BuildLayout()
   {
     var root = new StackPanel { Spacing = 6, Margin = new Thickness(8) };
 
-    root.Children.Add(SectionHeader("WAVEFORM"));
+    root.Children.Add(_waveformHeader);
+    root.Children.Add(_customInstCheck);
     BuildWaveformButtons();
     root.Children.Add(_waveformGrid);
 
@@ -99,6 +103,11 @@ public sealed class SfxInspectorPanel : UserControl
     _effectCombo.ItemsSource = SfxTheme.EffectNames;
     _effectCombo.MaxDropDownHeight = 220;
     root.Children.Add(_effectCombo);
+    _effectParamPanel.SetOnParamChanged(param =>
+    {
+      if (_syncing || _ctrl == null) return;
+      _ctrl.DefaultEffectParam = param;
+    });
     root.Children.Add(_effectParamPanel);
 
     root.Children.Add(SectionHeader("ENVELOPE"));
@@ -122,6 +131,8 @@ public sealed class SfxInspectorPanel : UserControl
              })
     {
       var cb = new CheckBox { Content = label, FontSize = 10 };
+      if (SfxTheme.FilterTooltips.TryGetValue(filter, out var tip))
+        ToolTip.SetTip(cb, tip);
       _filterBoxes[filter] = cb;
       filtersPanel.Children.Add(cb);
     }
@@ -157,7 +168,9 @@ public sealed class SfxInspectorPanel : UserControl
         Padding = new Thickness(2),
         Content = new SfxWaveformIcon { Instrument = idx, Width = 30, Height = 14 },
       };
-      ToolTip.SetTip(btn, $"{idx + 1}: {SfxTheme.WaveformNames[idx]}");
+      ToolTip.SetTip(btn, _ctrl?.DefaultCustomInst == true
+        ? $"SFX slot {idx}: plays instrument pattern from SFX {idx}"
+        : $"{idx + 1}: {SfxTheme.WaveformNames[idx]}");
       btn.Click += (_, _) =>
       {
         if (_ctrl == null) return;
@@ -170,11 +183,12 @@ public sealed class SfxInspectorPanel : UserControl
 
   private void WireLocalEvents()
   {
-    _effectParamPanel.SetOnParamChanged(param =>
+    _customInstCheck.IsCheckedChanged += (_, _) =>
     {
       if (_syncing || _ctrl == null) return;
-      _ctrl.DefaultEffectParam = param;
-    });
+      _ctrl.ApplyCustomInstToSelection(_customInstCheck.IsChecked == true);
+      UpdateWaveformSection();
+    };
 
     _volumeSlider.PropertyChanged += (_, e) =>
     {
@@ -186,8 +200,13 @@ public sealed class SfxInspectorPanel : UserControl
     _effectCombo.SelectionChanged += (_, _) =>
     {
       if (_syncing || _ctrl == null || _effectCombo.SelectedIndex < 0) return;
-      _ctrl.DefaultEffect = (SfxEffect)_effectCombo.SelectedIndex;
+      var effect = (SfxEffect)_effectCombo.SelectedIndex;
+      _ctrl.DefaultEffect = effect;
+      if (effect != SfxEffect.None)
+        _ctrl.DefaultEffectParam = SfxEffectParamCodec.DefaultParam(effect);
       _effectParamPanel.SetEffect(_ctrl.DefaultEffect, _ctrl.DefaultEffectParam);
+      if (_effectCombo.SelectedIndex < SfxTheme.EffectTooltips.Count)
+        ToolTip.SetTip(_effectCombo, SfxTheme.EffectTooltips[_effectCombo.SelectedIndex]);
     };
 
     _previewChannel.ValueChanged += (_, e) =>
@@ -227,8 +246,12 @@ public sealed class SfxInspectorPanel : UserControl
       _volumeValue.Text = _ctrl.DefaultVolume.ToString();
       _effectCombo.SelectedIndex = (int)_ctrl.DefaultEffect;
       _effectParamPanel.SetEffect(_ctrl.DefaultEffect, _ctrl.DefaultEffectParam);
+      if (_effectCombo.SelectedIndex >= 0 && _effectCombo.SelectedIndex < SfxTheme.EffectTooltips.Count)
+        ToolTip.SetTip(_effectCombo, SfxTheme.EffectTooltips[_effectCombo.SelectedIndex]);
       _previewChannel.Value = _ctrl.SelectedChannel;
+      _customInstCheck.IsChecked = _ctrl.DefaultCustomInst;
       HighlightWaveform(_ctrl.DefaultWaveform);
+      UpdateWaveformSection();
       foreach (var (filter, cb) in _filterBoxes)
         cb.IsChecked = _ctrl.Filters.HasFlag(filter);
       _envelope.InvalidateVisual();
@@ -236,6 +259,35 @@ public sealed class SfxInspectorPanel : UserControl
     finally
     {
       _syncing = false;
+    }
+  }
+
+  private void UpdateWaveformSection()
+  {
+    if (_ctrl == null) return;
+    _waveformHeader.Text = _ctrl.DefaultCustomInst ? "INSTRUMENT" : "WAVEFORM";
+    for (int i = 0; i < _waveformGrid.Children.Count; i++)
+    {
+      if (_waveformGrid.Children[i] is not ToggleButton tb) continue;
+      if (_ctrl.DefaultCustomInst)
+      {
+        tb.Content = new TextBlock
+        {
+          Text = i.ToString(CultureInfo.InvariantCulture),
+          FontSize = 10,
+          Foreground = Brushes.White,
+          HorizontalAlignment = HorizontalAlignment.Center,
+          VerticalAlignment = VerticalAlignment.Center,
+        };
+      }
+      else
+      {
+        tb.Content = new SfxWaveformIcon { Instrument = i, Width = 30, Height = 14 };
+      }
+
+      ToolTip.SetTip(tb, _ctrl.DefaultCustomInst
+        ? $"SFX slot {i}: plays instrument pattern from SFX {i}"
+        : $"{i + 1}: {SfxTheme.WaveformNames[i]}");
     }
   }
 

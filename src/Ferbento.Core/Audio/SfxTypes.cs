@@ -148,6 +148,48 @@ public readonly struct SongPattern
     }
 }
 
+/// <summary>
+/// Pico-8 packs editor mode and filter switches into the first header byte of each SFX slot.
+/// </summary>
+public static class Pico8SfxHeader
+{
+    public static byte EncodeFilterByte(SfxFilters filters, bool trackerMode = false)
+    {
+        int b = trackerMode ? 1 : 0;
+        if ((filters & SfxFilters.Noiz) != 0) b |= 2;
+        if ((filters & SfxFilters.Buzz) != 0) b |= 4;
+
+        int detune = 0;
+        if ((filters & SfxFilters.Detune2) != 0) detune = 2;
+        else if ((filters & SfxFilters.Detune1) != 0) detune = 1;
+
+        int reverb = (filters & SfxFilters.Reverb) != 0 ? 1 : 0;
+        int dampen = (filters & SfxFilters.Dampen) != 0 ? 1 : 0;
+
+        b += detune * 8;
+        b += reverb * 24;
+        b += dampen * 72;
+        return (byte)b;
+    }
+
+    public static SfxFilters DecodeFilterByte(byte value)
+    {
+        var filters = SfxFilters.None;
+        if ((value & 2) != 0) filters |= SfxFilters.Noiz;
+        if ((value & 4) != 0) filters |= SfxFilters.Buzz;
+
+        switch ((value / 8) % 3)
+        {
+            case 1: filters |= SfxFilters.Detune1; break;
+            case 2: filters |= SfxFilters.Detune2; break;
+        }
+
+        if ((value / 24) % 3 > 0) filters |= SfxFilters.Reverb;
+        if ((value / 72) % 3 > 0) filters |= SfxFilters.Dampen;
+        return filters;
+    }
+}
+
 public static class SfxCodec
 {
     public static void WriteSlot(VirtualMemory mem, AudioMemoryLayout layout, int slotIndex,
@@ -165,10 +207,10 @@ public static class SfxCodec
         }
 
         int header = addr + layout.NotesPerSfx * 2;
-        mem.Poke(header, (byte)System.Math.Clamp(speed, 1, 255));
-        mem.Poke(header + 1, (byte)System.Math.Clamp(loopStart, 0, layout.NotesPerSfx - 1));
-        mem.Poke(header + 2, (byte)System.Math.Clamp(loopEnd, 0, layout.NotesPerSfx - 1));
-        mem.Poke(header + 3, (byte)filters);
+        mem.Poke(header, Pico8SfxHeader.EncodeFilterByte(filters));
+        mem.Poke(header + 1, (byte)System.Math.Clamp(speed, 1, 255));
+        mem.Poke(header + 2, (byte)System.Math.Clamp(loopStart, 0, layout.NotesPerSfx - 1));
+        mem.Poke(header + 3, (byte)System.Math.Clamp(loopEnd, 0, layout.NotesPerSfx - 1));
     }
 
     public static SfxNote[] ReadNotes(VirtualMemory mem, AudioMemoryLayout layout, int slotIndex)
@@ -191,10 +233,10 @@ public static class SfxCodec
 
         int header = layout.SfxSlotAddress(slotIndex) + layout.NotesPerSfx * 2;
         return (
-            mem.Peek(header),
             mem.Peek(header + 1),
             mem.Peek(header + 2),
-            (SfxFilters)mem.Peek(header + 3));
+            mem.Peek(header + 3),
+            Pico8SfxHeader.DecodeFilterByte(mem.Peek(header)));
     }
 }
 

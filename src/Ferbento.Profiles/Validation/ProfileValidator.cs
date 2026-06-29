@@ -156,6 +156,12 @@ public sealed class ProfileValidator
             AddError(r, "Audio.SampleRate must be between 8000 and 192000");
         if (p.Audio.NotesPerSfx < 1 || p.Audio.NotesPerSfx > 128)
             AddError(r, "Audio.NotesPerSfx must be between 1 and 128");
+        if (p.Audio.SfxOctaveMin < 0 || p.Audio.SfxOctaveMin > 5)
+            AddError(r, "Audio.SfxOctaveMin must be between 0 and 5");
+        if (p.Audio.SfxOctaveMax < 1 || p.Audio.SfxOctaveMax > 5)
+            AddError(r, "Audio.SfxOctaveMax must be between 1 and 5");
+        if (p.Audio.SfxOctaveMin >= p.Audio.SfxOctaveMax)
+            AddError(r, "Audio.SfxOctaveMin must be less than SfxOctaveMax");
     }
 
     private static void ValidateCode(HardwareProfile p, ProfileValidationResult r)

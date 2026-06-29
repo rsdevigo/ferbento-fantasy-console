@@ -37,8 +37,13 @@ public sealed class SfxChannel : ISampleProvider
     private bool _usePico8Pitch;
     private bool _releaseLoop;
 
-    private int _slideTargetNote;
-    private double _slideSpeed;
+    private int _slideStartNote;
+    private int _slideEndNote;
+    private int _slideStartVolume;
+    private int _slideEndVolume;
+    private int _dropSemitones;
+    private int _previousPitch;
+    private int _previousVolume;
     private double _vibratoPhase;
     private double _vibratoDepth;
     private double _vibratoSpeed;
@@ -135,6 +140,8 @@ public sealed class SfxChannel : ISampleProvider
             _frameCounter = 0;
             _releaseLoop = false;
             _playingSfxIndex = sfxIndex;
+            _previousPitch = 0;
+            _previousVolume = 0;
             _playing = true;
             AdvanceNote();
         });
@@ -256,6 +263,8 @@ public sealed class SfxChannel : ISampleProvider
             _lastNoiseAdvance = _phase / (2 * System.Math.PI);
             InitializeEffect();
             SetupCustomInstrument();
+            _previousPitch = note.Pitch;
+            _previousVolume = note.Volume;
         }
 
         _patternIndex++;
@@ -294,47 +303,57 @@ public sealed class SfxChannel : ISampleProvider
 
     private void InitializeEffect()
     {
-        _slideTargetNote = 0;
-        _slideSpeed = 0;
         _vibratoPhase = 0;
-        _vibratoDepth = 0;
-        _vibratoSpeed = 0;
         _fadeVolume = _currentVolume;
         _fadeTargetVolume = _currentVolume;
         _fadeSpeed = 0;
-        _arpeggioNotes = 0;
+        _arpeggioNotes = _currentEffectParam;
         _arpeggioIndex = 0;
         _arpeggioTimer = 0;
+        _slideStartNote = _previousPitch;
+        _slideEndNote = _currentNote;
+        _slideStartVolume = _previousVolume;
+        _slideEndVolume = _currentVolume;
+        _dropSemitones = 0;
 
         switch (_currentEffect)
         {
             case SfxEffect.Slide:
-                _slideTargetNote = _currentEffectParam & 0xFF;
-                _slideSpeed = ((_currentEffectParam >> 8) & 0xFF) / 100.0;
+                if ((_currentEffectParam & 0xFF) > 0)
+                    _slideEndNote = _currentEffectParam & 0xFF;
                 break;
             case SfxEffect.Vibrato:
                 _vibratoDepth = (_currentEffectParam & 0xFF) / 100.0;
+                if (_vibratoDepth < 0.01) _vibratoDepth = 0.05;
                 _vibratoSpeed = ((_currentEffectParam >> 8) & 0xFF) / 100.0;
+                if (_vibratoSpeed < 0.01) _vibratoSpeed = 0.3;
                 break;
             case SfxEffect.Drop:
-                _slideTargetNote = _currentNote - (_currentEffectParam & 0xFF);
-                _slideSpeed = ((_currentEffectParam >> 8) & 0xFF) / 100.0;
+                _dropSemitones = _currentEffectParam & 0xFF;
+                if (_dropSemitones <= 0) _dropSemitones = 12;
                 break;
             case SfxEffect.FadeIn:
                 _fadeTargetVolume = 7;
                 _fadeSpeed = (_currentEffectParam & 0xFF) / 100.0;
+                if (_fadeSpeed < 0.01) _fadeSpeed = 0.2;
                 _currentVolume = 0;
+                _fadeVolume = 0;
                 break;
             case SfxEffect.FadeOut:
                 _fadeTargetVolume = 0;
                 _fadeSpeed = (_currentEffectParam & 0xFF) / 100.0;
+                if (_fadeSpeed < 0.01) _fadeSpeed = 0.2;
                 break;
             case SfxEffect.Arpeggio:
             case SfxEffect.Arpeggio2:
-                _arpeggioNotes = _currentEffectParam;
+                if (_currentEffectParam == 0)
+                    _arpeggioNotes = PackArpeggioOffsets(0, 4, 7);
                 break;
         }
     }
+
+    private static int PackArpeggioOffsets(int o0, int o1, int o2) =>
+        ((o2 & 0xF) << 8) | ((o1 & 0xF) << 4) | (o0 & 0xF);
 
     private double GetNextSample()
     {
@@ -417,34 +436,45 @@ public sealed class SfxChannel : ISampleProvider
 
     private double GenerateMelodicSample(int note, int instrument, int volume, double phase, ref double phaseRef, bool customInst = false, double pitchScale = 1.0)
     {
-        double freq = NoteToFrequency(note, _usePico8Pitch) * pitchScale;
+        double noteProgress = _speed <= 0 ? 1.0 : System.Math.Clamp(_frameCounter / (double)_speed, 0, 1);
+        int pitchNote = note;
+        int vol = volume;
 
         switch (_currentEffect)
         {
             case SfxEffect.Slide:
+                pitchNote = (int)System.Math.Round(_slideStartNote + (_slideEndNote - _slideStartNote) * noteProgress);
+                vol = (int)System.Math.Round(_slideStartVolume + (_slideEndVolume - _slideStartVolume) * noteProgress);
+                break;
             case SfxEffect.Drop:
-                freq = NoteToFrequency((int)(note + _slideSpeed * _frameCounter), _usePico8Pitch) * pitchScale;
+                pitchNote = (int)System.Math.Round(note - _dropSemitones * noteProgress);
                 break;
             case SfxEffect.Vibrato:
                 _vibratoPhase += _vibratoSpeed;
-                freq *= 1 + _vibratoDepth * System.Math.Sin(_vibratoPhase);
+                pitchNote = note;
                 break;
         }
 
+        double freq = NoteToFrequency(pitchNote, _usePico8Pitch) * pitchScale;
+
+        if (_currentEffect == SfxEffect.Vibrato)
+            freq *= 1 + _vibratoDepth * System.Math.Sin(_vibratoPhase);
+
         if (_currentEffect == SfxEffect.Arpeggio || _currentEffect == SfxEffect.Arpeggio2)
         {
-            _arpeggioTimer += 1.0 / _sampleRate * 60;
-            if (_arpeggioTimer >= 1.0 / 3.0)
+            double arpStepSeconds = _currentEffect == SfxEffect.Arpeggio2 ? 4.0 / 60.0 : 2.0 / 60.0;
+            _arpeggioTimer += 1.0 / _sampleRate;
+            if (_arpeggioTimer >= arpStepSeconds)
             {
                 _arpeggioTimer = 0;
                 _arpeggioIndex = (_arpeggioIndex + 1) % 3;
             }
-            int[] arpNotes = DecodeArpeggio(_arpeggioNotes);
-            if (arpNotes.Length > _arpeggioIndex)
-                freq = NoteToFrequency(arpNotes[_arpeggioIndex], _usePico8Pitch) * pitchScale;
+
+            int[] arpOffsets = DecodeArpeggioOffsets(_arpeggioNotes);
+            if (arpOffsets.Length > _arpeggioIndex)
+                freq = NoteToFrequency(note + arpOffsets[_arpeggioIndex], _usePico8Pitch) * pitchScale;
         }
 
-        int vol = volume;
         if (_currentEffect == SfxEffect.FadeIn || _currentEffect == SfxEffect.FadeOut)
         {
             _fadeVolume += (int)(_fadeSpeed * (_fadeTargetVolume - _fadeVolume));
@@ -556,14 +586,13 @@ public sealed class SfxChannel : ISampleProvider
     private static double PulseWave(double phase, double duty) =>
         (phase / (2 * System.Math.PI) % 1) < duty ? 1 : -1;
 
-    private static int[] DecodeArpeggio(int param)
+    private static int[] DecodeArpeggioOffsets(int param)
     {
-        var notes = new List<int>();
-        for (int i = 0; i < 3; i++)
-        {
-            int n = (param >> (i * 4)) & 0xF;
-            if (n > 0) notes.Add(n);
-        }
-        return notes.Count > 0 ? notes.ToArray() : new[] { 0 };
+        return
+        [
+            param & 0xF,
+            (param >> 4) & 0xF,
+            (param >> 8) & 0xF,
+        ];
     }
 }

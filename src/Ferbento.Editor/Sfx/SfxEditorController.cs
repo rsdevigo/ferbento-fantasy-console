@@ -13,6 +13,7 @@ public sealed class SfxEditorController : INotifyPropertyChanged
   public SfxEditorController()
   {
     ResizeSlotNames(Document.SfxSlotCount);
+    AudioEditorLimits.ApplySfxPitchRange(_profile);
   }
 
   public SfxDocument Document { get; } = new();
@@ -31,12 +32,19 @@ public sealed class SfxEditorController : INotifyPropertyChanged
   private int _defaultVolume = 7;
   private SfxEffect _defaultEffect;
   private int _defaultEffectParam;
+  private bool _defaultCustomInst;
+  private readonly bool[] _waveformInstrumentSlots = new bool[8];
   private bool _isPlaying;
   private bool _loopPlayback = true;
   private int _zoomLevel = 2;
   private string _statusMessage = "Click or press Enter to place a note.";
   private readonly HashSet<int> _selectedSteps = new();
   private string[] _slotNames = [];
+  private int[] _slotColors = [];
+  private SfxSlotSnapshot? _batchBefore;
+  private int _batchDepth;
+  private int _playGraceTicks;
+  private bool _suppressCursorRefresh;
 
   public event Action? Edited;
   public event Action? RefreshRequested;
@@ -45,6 +53,66 @@ public sealed class SfxEditorController : INotifyPropertyChanged
   public int SfxSlotCount => Document.SfxSlotCount;
   public int NotesPerSfx => Document.NotesPerSfx;
   public int ChannelCount => Document.ChannelCount;
+  public ColorChip? ColorChip => _bus?.Color;
+
+  public int SlotColor
+  {
+    get => GetSlotColor(_selectedSlot);
+    set => SetSlotColor(_selectedSlot, value);
+  }
+
+  public int GetSlotColor(int slot)
+  {
+    if (_slotColors.Length == 0) return SfxSlotColors.DefaultIndex(slot);
+    slot = Math.Clamp(slot, 0, _slotColors.Length - 1);
+    return _slotColors[slot];
+  }
+
+  public void SetSlotColor(int slot, int colorIndex)
+  {
+    if (_slotColors.Length == 0) return;
+    slot = Math.Clamp(slot, 0, _slotColors.Length - 1);
+    colorIndex = SfxSlotColors.ClampIndex(colorIndex);
+    if (_slotColors[slot] == colorIndex) return;
+    _slotColors[slot] = colorIndex;
+    Notify(nameof(SlotColor));
+    Edited?.Invoke();
+    RefreshRequested?.Invoke();
+  }
+
+  public SfxProjectData ExportProjectData() => new()
+  {
+    SlotNames = _slotNames.ToArray(),
+    SlotColors = _slotColors.ToArray(),
+    WaveformInstrumentSlots = _waveformInstrumentSlots.ToArray(),
+  };
+
+  public void ImportProjectData(SfxProjectData? data)
+  {
+    if (data?.SlotNames is { } names)
+    {
+      for (int i = 0; i < Math.Min(names.Length, _slotNames.Length); i++)
+        _slotNames[i] = names[i]?.Length > 8 ? names[i][..8] : names[i] ?? "";
+    }
+
+    if (data?.SlotColors is { } colors)
+    {
+      for (int i = 0; i < Math.Min(colors.Length, _slotColors.Length); i++)
+        _slotColors[i] = SfxSlotColors.ClampIndex(colors[i]);
+    }
+
+    if (data?.WaveformInstrumentSlots is { } waveformSlots)
+    {
+      for (int i = 0; i < Math.Min(waveformSlots.Length, _waveformInstrumentSlots.Length); i++)
+        _waveformInstrumentSlots[i] = waveformSlots[i];
+      PushWaveformSlotsToEngine();
+    }
+
+    Notify(nameof(SlotName));
+    Notify(nameof(SlotColor));
+    Notify(nameof(WaveformInstrumentSlot));
+    RefreshRequested?.Invoke();
+  }
   public bool CanUndo => Undo.UndoCount > 0;
   public bool CanRedo => Undo.RedoCount > 0;
 
@@ -61,6 +129,9 @@ public sealed class SfxEditorController : INotifyPropertyChanged
       ClearSelection();
       Notify();
       Notify(nameof(SlotName));
+      Notify(nameof(SlotColor));
+      Notify(nameof(IsInstrumentDefinitionSlot));
+      Notify(nameof(WaveformInstrumentSlot));
       RefreshRequested?.Invoke();
     }
   }
@@ -91,6 +162,7 @@ public sealed class SfxEditorController : INotifyPropertyChanged
     set
     {
       _cursorStep = Math.Clamp(value, 0, NotesPerSfx - 1);
+      if (_suppressCursorRefresh) return;
       Notify();
       Notify(nameof(StatusMessage));
       RefreshRequested?.Invoke();
@@ -103,6 +175,7 @@ public sealed class SfxEditorController : INotifyPropertyChanged
     set
     {
       _cursorRow = Math.Clamp(value, 0, SfxPitch.PitchNames.Count - 1);
+      if (_suppressCursorRefresh) return;
       Notify();
       RefreshRequested?.Invoke();
     }
@@ -129,13 +202,55 @@ public sealed class SfxEditorController : INotifyPropertyChanged
   public SfxEffect DefaultEffect
   {
     get => _defaultEffect;
-    set { _defaultEffect = value; Notify(); }
+    set
+    {
+      if (_defaultEffect == value) return;
+      _defaultEffect = value;
+      if (value != SfxEffect.None && _defaultEffectParam == 0)
+        _defaultEffectParam = SfxEffectParamCodec.DefaultParam(value);
+      Notify();
+      Notify(nameof(DefaultEffectParam));
+    }
   }
 
   public int DefaultEffectParam
   {
     get => _defaultEffectParam;
     set { _defaultEffectParam = Math.Clamp(value, 0, 0xFFFF); Notify(); }
+  }
+
+  public bool DefaultCustomInst
+  {
+    get => _defaultCustomInst;
+    set
+    {
+      if (_defaultCustomInst == value) return;
+      _defaultCustomInst = value;
+      Notify();
+    }
+  }
+
+  public bool IsInstrumentDefinitionSlot => _selectedSlot is >= 0 and < 8;
+
+  public bool WaveformInstrumentSlot
+  {
+    get => _selectedSlot is >= 0 and < 8 && _waveformInstrumentSlots[_selectedSlot];
+    set => SetWaveformInstrumentSlot(_selectedSlot, value);
+  }
+
+  public bool GetWaveformInstrumentSlot(int slot) =>
+    slot is >= 0 and < 8 && _waveformInstrumentSlots[slot];
+
+  public void SetWaveformInstrumentSlot(int slot, bool enabled)
+  {
+    if (slot is < 0 or >= 8) return;
+    if (_waveformInstrumentSlots[slot] == enabled) return;
+    _waveformInstrumentSlots[slot] = enabled;
+    _bus?.Sound.SetWaveformSlot(slot, enabled);
+    if (slot == _selectedSlot)
+      Notify(nameof(WaveformInstrumentSlot));
+    Edited?.Invoke();
+    RefreshRequested?.Invoke();
   }
 
   public int Speed
@@ -185,6 +300,8 @@ public sealed class SfxEditorController : INotifyPropertyChanged
     {
       if (Document.Filters == value) return;
       ApplyMutation("Filters", doc => doc.Filters = value);
+      PushFiltersToChannel();
+      Notify(nameof(Filters));
     }
   }
 
@@ -236,6 +353,7 @@ public sealed class SfxEditorController : INotifyPropertyChanged
     _bus = bus;
     _profile = bus.Profile;
     ApplyProfileLimits(reloadFromBus: true);
+    PushWaveformSlotsToEngine();
   }
 
   private void ApplyProfileLimits(bool reloadFromBus)
@@ -245,6 +363,8 @@ public sealed class SfxEditorController : INotifyPropertyChanged
 
     Document.SetProfile(_profile);
     ResizeSlotNames(SfxSlotCount);
+    AudioEditorLimits.ApplySfxPitchRange(_profile);
+    KeepCursorPitchInView();
 
     _selectedSlot = Math.Clamp(prevSlot, 0, SfxSlotCount - 1);
     _selectedChannel = Math.Clamp(prevChannel, 0, ChannelCount - 1);
@@ -259,6 +379,9 @@ public sealed class SfxEditorController : INotifyPropertyChanged
     Notify(nameof(LoopStart));
     Notify(nameof(LoopEnd));
     Notify(nameof(SlotName));
+    Notify(nameof(SlotColor));
+    Notify(nameof(IsInstrumentDefinitionSlot));
+    Notify(nameof(WaveformInstrumentSlot));
 
     if (reloadFromBus)
       LoadSlotFromBus(_selectedSlot);
@@ -268,9 +391,13 @@ public sealed class SfxEditorController : INotifyPropertyChanged
 
   private void ResizeSlotNames(int count)
   {
-    var next = new string[count];
-    Array.Copy(_slotNames, next, Math.Min(_slotNames.Length, count));
-    _slotNames = next;
+    var nextNames = new string[count];
+    var nextColors = new int[count];
+    Array.Copy(_slotNames, nextNames, Math.Min(_slotNames.Length, count));
+    for (int i = 0; i < count; i++)
+      nextColors[i] = i < _slotColors.Length ? _slotColors[i] : SfxSlotColors.DefaultIndex(i);
+    _slotNames = nextNames;
+    _slotColors = nextColors;
   }
 
   public void RefreshFromBus()
@@ -295,12 +422,18 @@ public sealed class SfxEditorController : INotifyPropertyChanged
   public void TickPlayback()
   {
     if (!IsPlaying || _bus == null) return;
-    var ch = _bus.Sound.Engine.Channels[SelectedChannel];
-    if (!ch.IsPlaying)
+
+    if (_playGraceTicks > 0)
+      _playGraceTicks--;
+    else
     {
-      IsPlaying = false;
-      _statusMessage = "Playback finished.";
-      Notify(nameof(StatusMessage));
+      var ch = _bus.Sound.Engine.Channels[SelectedChannel];
+      if (!ch.IsPlaying)
+      {
+        IsPlaying = false;
+        _statusMessage = "Playback finished.";
+        Notify(nameof(StatusMessage));
+      }
     }
 
     Notify(nameof(PlayheadColumn));
@@ -308,6 +441,23 @@ public sealed class SfxEditorController : INotifyPropertyChanged
   }
 
   public int PlayheadColumn => GetPlayheadColumn();
+
+  public void BeginBatchEdit()
+  {
+    if (_batchDepth++ == 0)
+      _batchBefore = Document.CaptureSnapshot();
+  }
+
+  public void EndBatchEdit(string label = "Edit notes")
+  {
+    if (_batchDepth == 0) return;
+    if (--_batchDepth > 0) return;
+
+    var after = Document.CaptureSnapshot();
+    if (_batchBefore is { } before)
+      CommitSnapshot(before, after, label);
+    _batchBefore = null;
+  }
 
   public void SelectStep(int step, bool additive = false)
   {
@@ -351,20 +501,53 @@ public sealed class SfxEditorController : INotifyPropertyChanged
     PlaceNote(CursorStep, SfxPitch.RowToMidi(CursorRow));
   }
 
-  public void PlaceNote(int step, int midiPitch)
+  public void PlaceNote(int step, int picoPitch, bool preview = true, bool updateCursor = true)
   {
     step = Math.Clamp(step, 0, NotesPerSfx - 1);
+    picoPitch = Math.Clamp(picoPitch, 1, SfxPitch.PicoMax);
     var current = Document.GetNote(step);
     SfxNote after;
-    if (!current.IsEmpty && current.Pitch == midiPitch)
+    if (!current.IsEmpty && current.Pitch == picoPitch)
       after = new SfxNote();
     else
-      after = new SfxNote(midiPitch, DefaultWaveform, DefaultVolume, DefaultEffect, DefaultEffectParam);
+      after = CreateDefaultNote(picoPitch);
 
     ApplyNoteMutation(step, current, after, "Place note");
-    CursorStep = step;
-    CursorRow = SfxPitch.MidiToRow(midiPitch);
-    PreviewNote(after);
+    if (updateCursor)
+      SetCursor(step, SfxPitch.PitchToRow(picoPitch));
+    if (preview && !after.IsEmpty)
+      PreviewNote(after);
+  }
+
+  private void SetCursor(int step, int row)
+  {
+    _suppressCursorRefresh = true;
+    try
+    {
+      CursorStep = step;
+      CursorRow = row;
+    }
+    finally
+    {
+      _suppressCursorRefresh = false;
+    }
+
+    Notify(nameof(CursorStep));
+    Notify(nameof(CursorRow));
+    Notify(nameof(StatusMessage));
+  }
+
+  private void KeepCursorPitchInView()
+  {
+    int pitch = SfxPitch.RowToPitch(CursorRow);
+    _cursorRow = SfxPitch.PitchToRow(pitch);
+    Notify(nameof(CursorRow));
+  }
+
+  public void MoveCursorTo(int step, int row)
+  {
+    SetCursor(step, row);
+    RefreshRequested?.Invoke();
   }
 
   public void DeleteAtCursor()
@@ -403,7 +586,7 @@ public sealed class SfxEditorController : INotifyPropertyChanged
 
     var note = Document.GetNote(start);
     if (note.IsEmpty)
-      note = new SfxNote(SfxPitch.RowToMidi(CursorRow), DefaultWaveform, DefaultVolume, DefaultEffect, DefaultEffectParam);
+      note = CreateDefaultNote(SfxPitch.RowToMidi(CursorRow));
 
     for (int i = start; i <= end; i++)
       Document.SetNote(i, note);
@@ -470,7 +653,7 @@ public sealed class SfxEditorController : INotifyPropertyChanged
     {
       var note = Document.GetNote(step);
       if (note.IsEmpty) continue;
-      int newPitch = Math.Clamp(note.Pitch + semitones, 1, 127);
+      int newPitch = Math.Clamp(note.Pitch + semitones, 1, SfxPitch.PicoMax);
       Document.SetNote(step, new SfxNote(newPitch, note.Instrument, note.Volume, note.Effect, note.EffectParam, note.CustomInst));
     }
 
@@ -505,7 +688,7 @@ public sealed class SfxEditorController : INotifyPropertyChanged
     NotifySelection();
   }
 
-  public void SetNoteProperty(int step, int? waveform = null, int? volume = null, SfxEffect? effect = null, int? effectParam = null)
+  public void SetNoteProperty(int step, int? waveform = null, int? volume = null, SfxEffect? effect = null, int? effectParam = null, bool? customInst = null)
   {
     step = Math.Clamp(step, 0, NotesPerSfx - 1);
     var n = Document.GetNote(step);
@@ -516,8 +699,28 @@ public sealed class SfxEditorController : INotifyPropertyChanged
       volume ?? n.Volume,
       effect ?? n.Effect,
       effectParam ?? n.EffectParam,
-      n.CustomInst);
+      customInst ?? n.CustomInst);
     ApplyNoteMutation(step, n, after, "Edit note");
+  }
+
+  public void ApplyCustomInstToSelection(bool customInst)
+  {
+    DefaultCustomInst = customInst;
+    var steps = GetActiveSteps();
+    var before = Document.CaptureSnapshot();
+    foreach (var step in steps)
+    {
+      var n = Document.GetNote(step);
+      if (n.IsEmpty) continue;
+      Document.SetNote(step, new SfxNote(n.Pitch, n.Instrument, n.Volume, n.Effect, n.EffectParam, customInst));
+    }
+
+    CommitSnapshot(before, Document.CaptureSnapshot(), "Custom instrument");
+  }
+
+  public void ToggleCustomInst()
+  {
+    ApplyCustomInstToSelection(!DefaultCustomInst);
   }
 
   public void ApplyWaveformToSelection(int waveform)
@@ -563,10 +766,23 @@ public sealed class SfxEditorController : INotifyPropertyChanged
   {
     if (_bus == null) return;
     SaveCurrentSlot();
-    _bus.Sound.LoadSlotToChannel(SelectedSlot, SelectedChannel);
-    _bus.Sound.Engine.SetSfxLoop(SelectedChannel, LoopStart, LoopEnd);
+
+    var engine = _bus.Sound.Engine;
+    int ch = SelectedChannel;
+    for (int i = 0; i < NotesPerSfx; i++)
+      engine.SetSfxNote(ch, i, Document.GetNote(i));
+    engine.SetSfxSpeed(ch, Speed);
+    engine.SetSfxLoop(ch, LoopStart, LoopEnd);
+
+    var channel = engine.Channels[ch];
+    channel.SetFilters(Document.Filters);
+    channel.SetUsePico8Pitch(true);
+    if (!LoopPlayback)
+      channel.ReleaseLoop();
+
     int offset = fromCursor ? CursorStep : 0;
-    _bus.Sound.Sfx(SelectedSlot, SelectedChannel, offset);
+    channel.Play(offset, SelectedSlot);
+    _playGraceTicks = 6;
     IsPlaying = true;
     _statusMessage = $"Playing slot {SelectedSlot:D2}...";
     Notify(nameof(StatusMessage));
@@ -588,17 +804,44 @@ public sealed class SfxEditorController : INotifyPropertyChanged
     else Play(fromCursor);
   }
 
-  public void PreviewPitch(int midiPitch)
+  public void PreviewPitch(int picoPitch)
   {
     if (_bus == null) return;
-    var note = new SfxNote(midiPitch, DefaultWaveform, DefaultVolume, DefaultEffect, DefaultEffectParam);
-    _bus.Sound.PreviewNote(SelectedChannel, note, Speed);
+    var note = CreateDefaultNote(picoPitch);
+    PreviewNote(note);
   }
 
   public void PreviewNote(SfxNote note)
   {
     if (_bus == null || note.IsEmpty) return;
-    _bus.Sound.PreviewNote(SelectedChannel, note, Speed);
+    var channel = _bus.Sound.Engine.Channels[SelectedChannel];
+    for (int i = 0; i < NotesPerSfx; i++)
+      channel.SetNote(i, new SfxNote());
+
+    channel.SetSpeed(Speed);
+    channel.SetFilters(Document.Filters);
+    channel.SetUsePico8Pitch(true);
+
+    if (note.Effect == SfxEffect.Slide)
+    {
+      int startPitch = System.Math.Max(1, note.Pitch - 12);
+      channel.SetNote(0, new SfxNote(startPitch, note.Instrument, note.Volume));
+      channel.SetNote(1, note);
+      channel.SetLoop(0, 1);
+      channel.Play(0);
+    }
+    else
+    {
+      channel.SetNote(0, note);
+      channel.SetLoop(0, 0);
+      channel.Play(0);
+    }
+  }
+
+  private void PushFiltersToChannel()
+  {
+    if (_bus == null) return;
+    _bus.Sound.Engine.Channels[SelectedChannel].SetFilters(Document.Filters);
   }
 
   public bool HandleKey(string key, bool ctrl, bool shift, bool alt)
@@ -830,6 +1073,12 @@ public sealed class SfxEditorController : INotifyPropertyChanged
       return true;
     }
 
+    if (SfxEditorInputMap.Matches(key, ctrl, shift, alt, SfxEditorAction.ToggleCustomInst))
+    {
+      ToggleCustomInst();
+      return true;
+    }
+
     if (key.Equals("Return", StringComparison.OrdinalIgnoreCase))
     {
       PlaceNoteAtCursor();
@@ -885,6 +1134,12 @@ public sealed class SfxEditorController : INotifyPropertyChanged
   private void ApplyNoteMutation(int step, SfxNote beforeNote, SfxNote afterNote, string label)
   {
     if (beforeNote.ToRaw() == afterNote.ToRaw()) return;
+    if (_batchDepth > 0)
+    {
+      Document.SetNote(step, afterNote);
+      return;
+    }
+
     var before = Document.CaptureSnapshot();
     Document.SetNote(step, afterNote);
     CommitSnapshot(before, Document.CaptureSnapshot(), label);
@@ -952,7 +1207,17 @@ public sealed class SfxEditorController : INotifyPropertyChanged
     if (note.IsEmpty)
       return "Click or press Enter to place a note.";
     return
-      $"Step {CursorStep:X2} · {SfxPitch.NoteToPitchName(note.Pitch)} · {SfxTheme.WaveformNames[note.Instrument & 7]} · Vol {note.Volume} · {SfxTheme.EffectNames[(int)note.Effect]} | Slot {SelectedSlot:D2} · Spd {Speed}";
+      $"Step {CursorStep:X2} · {SfxPitch.NoteToPitchName(note.Pitch)} · {SfxTheme.InstrumentLabel(note.Instrument, note.CustomInst)} · Vol {note.Volume} · {SfxTheme.EffectNames[(int)note.Effect]} | Slot {SelectedSlot:D2} · Spd {Speed}";
+  }
+
+  private SfxNote CreateDefaultNote(int pitch) =>
+    new(pitch, DefaultWaveform, DefaultVolume, DefaultEffect, DefaultEffectParam, DefaultCustomInst);
+
+  private void PushWaveformSlotsToEngine()
+  {
+    if (_bus == null) return;
+    for (int i = 0; i < _waveformInstrumentSlots.Length; i++)
+      _bus.Sound.SetWaveformSlot(i, _waveformInstrumentSlots[i]);
   }
 
   private void NotifySelection()

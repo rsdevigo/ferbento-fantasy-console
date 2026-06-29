@@ -129,6 +129,9 @@ public sealed class AudioEngine : IDisposable, ISfxInstrumentSource
             _waveformSlots[slotIndex] = isWaveform;
     }
 
+    public bool GetWaveformSlot(int slotIndex) =>
+        slotIndex is >= 0 and < 8 && _waveformSlots[slotIndex];
+
     public void QueueCommand(Action cmd) => _commandQueue.Enqueue(cmd);
 
     public void ProcessCommands()
@@ -429,13 +432,9 @@ public sealed class AudioEngine : IDisposable, ISfxInstrumentSource
         if (slotIndex < 0 || slotIndex >= _layout.SfxSlots) return;
         if (loopEnd < 0) loopEnd = _layout.NotesPerSfx - 1;
 
-        if (_memory != null)
-        {
-            SfxCodec.WriteSlot(_memory, _layout, slotIndex, notes, speed, loopStart, loopEnd, filters);
-            return;
-        }
-
         WriteSlotCache(slotIndex, notes, speed, loopStart, loopEnd, filters);
+        if (_memory != null)
+            SfxCodec.WriteSlot(_memory, _layout, slotIndex, notes, speed, loopStart, loopEnd, filters);
     }
 
     private readonly Dictionary<int, CachedSlot> _slotCache = new();
@@ -467,15 +466,15 @@ public sealed class AudioEngine : IDisposable, ISfxInstrumentSource
 
     private SfxNote[] ReadSlotNotes(int slotIndex)
     {
-        if (_memory != null)
-            return SfxCodec.ReadNotes(_memory, _layout, slotIndex);
-
         if (_slotCache.TryGetValue(slotIndex, out var cached))
         {
             var copy = new SfxNote[_layout.NotesPerSfx];
             Array.Copy(cached.Notes, copy, _layout.NotesPerSfx);
             return copy;
         }
+
+        if (_memory != null)
+            return SfxCodec.ReadNotes(_memory, _layout, slotIndex);
 
         return new SfxNote[_layout.NotesPerSfx];
     }

@@ -106,6 +106,9 @@ public partial class MainWindow : Window
 
         _session.GetMusicProject = () => musicView.ExportMusicData();
         _session.SetMusicProject = data => musicView.ImportMusicData(data);
+        _session.GetSfxProject = () => sfxView.ExportSfxProjectData();
+        _session.SetSfxProject = data => sfxView.ImportSfxProjectData(data);
+        _session.GetSfxSlotColor = slot => sfxView.Controller.GetSlotColor(slot);
         musicView.SetProjectLabel($"{_session.ProjectDisplayName}/MUSIC.JSON");
         _session.DirtyChanged += () => musicView.SetProjectLabel($"{_session.ProjectDisplayName}/MUSIC.JSON");
 
@@ -113,6 +116,7 @@ public partial class MainWindow : Window
         {
             spriteView?.RefreshPalette();
             tilemapView?.RefreshPalette();
+            sfxView?.RefreshPalette();
         };
 
         tilemapView!.SetSpriteController(spriteView!.Controller);

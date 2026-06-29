@@ -173,6 +173,11 @@ public class ProfileEditorView : UserControl
         _propertiesPanel.Children.Add(CreateSectionLabel("Memory"));
         _propertiesPanel.Children.Add(CreateProperty("RAM", $"{profile.Memory.Ram / 1024} KB"));
         _propertiesPanel.Children.Add(CreateProperty("Cart ROM", $"{profile.Memory.CartRom / 1024} KB"));
+        _propertiesPanel.Children.Add(CreateSectionLabel("Audio"));
+        _propertiesPanel.Children.Add(CreateProperty("Channels", profile.Audio.Channels.ToString()));
+        _propertiesPanel.Children.Add(CreateProperty("SFX Slots", profile.Audio.SfxSlots.ToString()));
+        _propertiesPanel.Children.Add(CreateProperty("Octave Min", profile.Audio.SfxOctaveMin.ToString()));
+        _propertiesPanel.Children.Add(CreateProperty("Octave Max", profile.Audio.SfxOctaveMax.ToString()));
     }
 
     private static Button CreateButton(string text, string color) => new()

@@ -91,6 +91,7 @@ public sealed class SoundChip : IChip
     public void LoadSlotToChannel(int slotIndex, int channel) => Engine.LoadSlotToChannel(slotIndex, channel);
     public void PreviewNote(int channel, SfxNote note, int speed = 4) => Engine.PreviewNote(channel, note, speed);
     public void SetWaveformSlot(int slotIndex, bool isWaveform) => Engine.SetWaveformSlot(slotIndex, isWaveform);
+    public bool GetWaveformSlot(int slotIndex) => Engine.GetWaveformSlot(slotIndex);
     public int SfxSlotCount => _layout.SfxSlots;
     public AudioMemoryLayout Layout => _layout;
 }

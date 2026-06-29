@@ -43,4 +43,16 @@ public static class SfxEffectParamCodec
       SfxEffect.Arpeggio or SfxEffect.Arpeggio2 => ("+0", "+1", "+2"),
       _ => ("", "", ""),
     };
+
+  public static int DefaultParam(SfxEffect effect) =>
+    effect switch
+    {
+      SfxEffect.Vibrato => Pack(SfxEffect.Vibrato, 8, 30),
+      SfxEffect.Drop => Pack(SfxEffect.Drop, 12, 50),
+      SfxEffect.FadeIn => Pack(SfxEffect.FadeIn, 30, 0),
+      SfxEffect.FadeOut => Pack(SfxEffect.FadeOut, 30, 0),
+      SfxEffect.Arpeggio => Pack(SfxEffect.Arpeggio, 0, 4, 7),
+      SfxEffect.Arpeggio2 => Pack(SfxEffect.Arpeggio2, 0, 4, 7),
+      _ => 0,
+    };
 }

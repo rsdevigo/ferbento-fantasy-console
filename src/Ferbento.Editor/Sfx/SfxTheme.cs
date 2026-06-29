@@ -24,6 +24,29 @@ public static class SfxTheme
   public static readonly IReadOnlyList<string> EffectNames =
     new[] { "none", "slide", "vibrato", "drop", "fadein", "fadeout", "arpeg", "arpeg2" };
 
+  public static readonly IReadOnlyList<string> EffectTooltips =
+  [
+    "No pitch or volume change during the note.",
+    "Glides from the previous note to this one — put slide on the destination note.",
+    "Wobbles pitch up and down during the note.",
+    "Bends pitch down by semitones over the note length.",
+    "Fades volume in from silence.",
+    "Fades volume out to silence.",
+    "Cycles through three pitch offsets (+0, +4, +7 semitones by default).",
+    "Arpeggio at half the speed of arpeg.",
+  ];
+
+  public static readonly IReadOnlyDictionary<SfxFilters, string> FilterTooltips =
+    new Dictionary<SfxFilters, string>
+    {
+      [SfxFilters.Noiz] = "Pure noise — only affects waveform 7 (tri2). Use that instrument to hear it.",
+      [SfxFilters.Buzz] = "Adds a gritty, bit-crushed buzz to the sound.",
+      [SfxFilters.Detune1] = "Mixes in a slightly detuned copy for a chorus effect.",
+      [SfxFilters.Detune2] = "Mixes in a copy one octave higher.",
+      [SfxFilters.Reverb] = "Adds a short echo delay to the sound.",
+      [SfxFilters.Dampen] = "Softens the sound with a low-pass filter.",
+    };
+
   private static readonly Color[] WaveformColors =
   {
     Color.Parse("#5588FF"),
@@ -50,4 +73,9 @@ public static class SfxTheme
 
   public static Color WaveformColor(SfxNote note) =>
     note.IsEmpty ? CanvasBackground : WaveformColor(note.Instrument, note.Volume);
+
+  public static string InstrumentLabel(int instrument, bool customInst) =>
+    customInst ? $"SFX {instrument}" : WaveformNames[instrument & 7];
+
+  public static Color CustomInstAccent => Color.Parse("#E6C07B");
 }

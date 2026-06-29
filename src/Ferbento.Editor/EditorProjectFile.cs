@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Ferbento.Core.Chips;
 using Ferbento.Editor.Music;
+using Ferbento.Editor.Sfx;
 using Ferbento.Profiles.BuiltIn;
 
 namespace Ferbento.Editor;
@@ -12,6 +13,7 @@ public sealed class EditorProjectFile
     public string Source { get; set; } = "";
     public string MemoryBase64 { get; set; } = "";
     public MusicProjectData? Music { get; set; }
+    public SfxProjectData? Sfx { get; set; }
 
     public static EditorProjectFile FromSession(EditorSession session, string source)
     {
@@ -23,6 +25,7 @@ public sealed class EditorProjectFile
             Source = source,
             MemoryBase64 = Convert.ToBase64String(bytes),
             Music = session.GetMusicProject?.Invoke(),
+            Sfx = session.GetSfxProject?.Invoke(),
         };
     }
 
@@ -42,6 +45,7 @@ public sealed class EditorProjectFile
         }
 
         session.SetMusicProject?.Invoke(Music);
+        session.SetSfxProject?.Invoke(Sfx);
         session.RefreshEditorsFromBus();
     }
 

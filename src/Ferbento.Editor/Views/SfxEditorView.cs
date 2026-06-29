@@ -36,6 +36,7 @@ public class SfxEditorView : UserControl, IProfileAwareEditor
     VerticalAlignment = VerticalAlignment.Center,
   };
   private readonly TextBox _nameBox = CreateCompactField(72, 8, monospace: false);
+  private readonly SfxSlotColorPicker _colorPicker = new() { VerticalAlignment = VerticalAlignment.Center };
   private readonly TextBox _speedField = CreateCompactField(30, 3);
   private readonly TextBox _loopStartField = CreateCompactField(26, 2);
   private readonly TextBox _loopEndField = CreateCompactField(26, 2);
@@ -47,6 +48,13 @@ public class SfxEditorView : UserControl, IProfileAwareEditor
     FontSize = 11,
   };
   private readonly ToggleButton _loopToggle = new() { Content = "Loop", Padding = new Thickness(6, 2), FontSize = 11 };
+  private readonly CheckBox _waveformInstCheck = new()
+  {
+    Content = "Wave inst.",
+    FontSize = 11,
+    IsVisible = false,
+    VerticalAlignment = VerticalAlignment.Center,
+  };
 
   private Action? _onEdited;
   private bool _syncing;
@@ -106,6 +114,17 @@ public class SfxEditorView : UserControl, IProfileAwareEditor
     RefreshVisuals();
   }
 
+  public SfxProjectData ExportSfxProjectData() => Ctrl.ExportProjectData();
+
+  public void ImportSfxProjectData(SfxProjectData? data) => Ctrl.ImportProjectData(data);
+
+  public void RefreshPalette()
+  {
+    _colorPicker.ColorChip = Ctrl.ColorChip;
+    _colorPicker.InvalidateVisual();
+    UpdateSlotColorAccent();
+  }
+
   private void WireEvents()
   {
     Ctrl.Edited += () => _onEdited?.Invoke();
@@ -121,6 +140,7 @@ public class SfxEditorView : UserControl, IProfileAwareEditor
         case nameof(SfxEditorController.LoopStart):
         case nameof(SfxEditorController.LoopEnd):
         case nameof(SfxEditorController.SlotName):
+        case nameof(SfxEditorController.SlotColor):
         case nameof(SfxEditorController.LoopPlayback):
           SyncControls();
           break;
@@ -165,10 +185,24 @@ public class SfxEditorView : UserControl, IProfileAwareEditor
       Ctrl.SlotName = _nameBox.Text ?? "";
     };
 
+    _colorPicker.ColorSelected += index =>
+    {
+      if (_syncing) return;
+      Ctrl.SlotColor = index;
+    };
+
     _loopToggle.IsCheckedChanged += (_, _) =>
     {
       if (_syncing) return;
       Ctrl.LoopPlayback = _loopToggle.IsChecked == true;
+    };
+
+    ToolTip.SetTip(_waveformInstCheck,
+      "Slots 0–7 only: pitches in this SFX define a custom waveform table for instrument index.");
+    _waveformInstCheck.IsCheckedChanged += (_, _) =>
+    {
+      if (_syncing) return;
+      Ctrl.WaveformInstrumentSlot = _waveformInstCheck.IsChecked == true;
     };
 
     _pianoRoll.PianoKeyClicked += midi => Ctrl.PreviewPitch(midi);
@@ -266,6 +300,11 @@ public class SfxEditorView : UserControl, IProfileAwareEditor
     {
       SyncSlotField();
       _nameBox.Text = Ctrl.SlotName;
+      _colorPicker.ColorChip = Ctrl.ColorChip;
+      _colorPicker.SelectedIndex = Ctrl.SlotColor;
+      UpdateSlotColorAccent();
+      _waveformInstCheck.IsVisible = Ctrl.IsInstrumentDefinitionSlot;
+      _waveformInstCheck.IsChecked = Ctrl.WaveformInstrumentSlot;
       SyncSpeedField();
       SyncLoopFields();
       _loopToggle.IsChecked = Ctrl.LoopPlayback;
@@ -277,8 +316,16 @@ public class SfxEditorView : UserControl, IProfileAwareEditor
     }
   }
 
+  private void UpdateSlotColorAccent()
+  {
+    var color = SfxSlotColors.ToColor(Ctrl.SlotColor, Ctrl.ColorChip);
+    _slotField.BorderBrush = new SolidColorBrush(color);
+    _slotField.BorderThickness = new Thickness(2);
+  }
+
   private void RefreshVisuals()
   {
+    _pianoRoll.InvalidateMeasure();
     _pianoRoll.InvalidateVisual();
     _propertyStrip.InvalidateVisual();
     _statusBar.Text = Ctrl.StatusMessage;
@@ -380,6 +427,9 @@ public class SfxEditorView : UserControl, IProfileAwareEditor
         slotPanel,
         Label("Name:"),
         _nameBox,
+        Label("Color:"),
+        _colorPicker,
+        _waveformInstCheck,
         Sep(),
         MakeIconBtn(SfxToolIcons.CreatePlayIcon(), "Play (Space)", () => Ctrl.TogglePlayStop()),
         MakeIconBtn(SfxToolIcons.CreateStopIcon(), "Stop (Esc)", () => Ctrl.Stop()),

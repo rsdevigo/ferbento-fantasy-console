@@ -7,7 +7,7 @@
   "sprites": { "sheetWidth": 128, "sheetHeight": 128, "tileSize": 8, "maxOnScreen": 64 },
   "map": { "width": 64, "height": 64, "tileSize": 8 },
   "memory": { "ram": 2048, "cartRom": 262144 },
-  "audio": { "channels": 5, "sfxSlots": 32, "musicPatterns": 32, "sampleRate": 44100 },
+  "audio": { "channels": 5, "sfxSlots": 32, "musicPatterns": 32, "sampleRate": 44100, "sfxOctaveMin": 0, "sfxOctaveMax": 5 },
   "code": { "maxTokens": 4096 },
   "cartridge": { "maxBytes": 524288 }
 }

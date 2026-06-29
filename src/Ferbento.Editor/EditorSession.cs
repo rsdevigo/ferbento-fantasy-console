@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using Ferbento.Core.Chips;
 using Ferbento.Editor.Music;
+using Ferbento.Editor.Sfx;
 using Ferbento.Profiles.Models;
 using Ferbento.Profiles.BuiltIn;
 
@@ -34,6 +35,9 @@ public sealed class EditorSession
     public Action<string>? SetSourceCode { get; set; }
     public Func<MusicProjectData?>? GetMusicProject { get; set; }
     public Action<MusicProjectData?>? SetMusicProject { get; set; }
+    public Func<SfxProjectData?>? GetSfxProject { get; set; }
+    public Action<SfxProjectData?>? SetSfxProject { get; set; }
+    public Func<int, int>? GetSfxSlotColor { get; set; }
 
     public event Action<HardwareProfile>? ProfileChanged;
     public event Action? DirtyChanged;
