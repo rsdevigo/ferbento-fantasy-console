@@ -635,7 +635,7 @@ public sealed class AudioEngine : IDisposable, ISfxInstrumentSource
 
     public void ConfigureMusic(int patternCount, int rowsPerPattern = 64)
     {
-        // Legacy editor API — patterns stored separately from Pico-8 song RAM.
+        // No-op: old editor API, patterns live outside song RAM.
     }
 
     public void SetMusicPattern(int patternIndex, int[] patternData)

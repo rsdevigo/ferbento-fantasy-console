@@ -8,8 +8,8 @@ using Avalonia.VisualTree;
 namespace Ferbento.Editor.Chrome;
 
 /// <summary>
-/// Keeps editor keyboard shortcuts working after layout refactors.
-/// Child controls (buttons, toggles) steal focus unless input is tunneled from the editor root.
+/// Routes keyboard input to the editor root.
+/// Buttons and toggles take focus otherwise and swallow shortcuts.
 /// </summary>
 public static class EditorKeyboardRouting
 {
@@ -39,7 +39,7 @@ public static class EditorKeyboardRouting
     }
 
     /// <summary>
-    /// Returns true when a text field has focus — editor shortcut handlers should not consume input.
+    /// True when a text field has focus, so shortcuts should not handle the key.
     /// </summary>
     public static bool ShouldDeferToFocusedTextInput(InputElement editorRoot)
     {

@@ -33,7 +33,7 @@ public static class MusicPatternGenerator
             bool beat = row % step == 0;
             bool offbeat = row % step == step / 2;
 
-            // Drums: noise hits on beats
+            // drums
             if (beat && rng.Next(3) != 0)
             {
                 int inst = 3; // noise
@@ -45,14 +45,14 @@ public static class MusicPatternGenerator
                 SetCell(data, row, drumCh, channelCount, 50, 2, vol - 1, rng);
             }
 
-            // Bass: root on beats, occasional fifth
+            // bass, sometimes a fifth up
             if (beat && bassCh != drumCh && rng.Next(3) != 0)
             {
                 int note = rng.Next(5) == 0 ? bassNote + 7 : bassNote;
                 SetCell(data, row, bassCh, channelCount, note, 2, vol, rng);
             }
 
-            // Melody: sparse pentatonic phrases
+            // melody
             if (melodyCh != drumCh && melodyCh != bassCh && rng.Next(4) == 0)
             {
                 int note = Pentatonic[rng.Next(Pentatonic.Length)];
@@ -60,7 +60,7 @@ public static class MusicPatternGenerator
                 SetCell(data, row, melodyCh, channelCount, note, inst, vol, rng);
             }
 
-            // Extra channels: light harmonic fill
+            // remaining channels
             for (int ch = 3; ch < channelCount; ch++)
             {
                 if (rng.Next(6) != 0) continue;
