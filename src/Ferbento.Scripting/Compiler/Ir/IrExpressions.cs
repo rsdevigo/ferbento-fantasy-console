@@ -21,10 +21,30 @@ public sealed record IrName(string Name) : IrExpr;
 /// <summary><c>target[key]</c>; printed as <c>target.key</c> when the key is an identifier string.</summary>
 public sealed record IrIndex(IrExpr Target, IrExpr Key) : IrExpr;
 
-public sealed record IrCall(IrExpr Callee, ImmutableArray<IrExpr> Arguments) : IrExpr;
+/// <summary>A call expression: <see cref="IrCall"/> or <see cref="IrMethodCall"/>.</summary>
+public abstract record IrCallExpr : IrExpr;
 
-/// <summary>Anonymous function: <c>function(params) body end</c>.</summary>
-public sealed record IrFunction(ImmutableArray<string> Parameters, ImmutableArray<IrStmt> Body) : IrExpr;
+public sealed record IrCall(IrExpr Callee, ImmutableArray<IrExpr> Arguments) : IrCallExpr;
+
+/// <summary><c>receiver:method(args)</c>: <see cref="Receiver"/> is evaluated once and passed as <c>self</c>.</summary>
+public sealed record IrMethodCall(IrExpr Receiver, string Method, ImmutableArray<IrExpr> Arguments) : IrCallExpr;
+
+/// <summary><c>...</c>: the extra arguments of a vararg function.</summary>
+public sealed record IrVararg : IrExpr;
+
+/// <summary>
+/// <c>(expr)</c> around a call or <c>...</c>: truncates the results to exactly one value.
+/// Parentheses around any other expression only group, so they are not kept in the IR.
+/// </summary>
+public sealed record IrParen(IrExpr Inner) : IrExpr;
+
+/// <summary>
+/// Anonymous function: <c>function(params) body end</c>. <see cref="IsVararg"/> adds a trailing <c>...</c>.
+/// </summary>
+public sealed record IrFunction(ImmutableArray<string> Parameters, ImmutableArray<IrStmt> Body) : IrExpr
+{
+    public bool IsVararg { get; init; }
+}
 
 /// <summary>Table field: positional when <see cref="Key"/> is null.</summary>
 public sealed record IrTableField(IrExpr? Key, IrExpr Value) : IrNode;
