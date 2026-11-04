@@ -7,12 +7,13 @@ namespace Ferbento.Scripting.Compiler.Diagnostics;
 /// <list type="bullet">
 /// <item><c>FB00xx</c>: lexer (characters, strings, numbers, comments)</item>
 /// <item><c>FB01xx</c>: parser (grammar)</item>
-/// <item><c>FB02xx</c>: static analysis (story 005)</item>
+/// <item><c>FB020x</c>: static analysis errors; <c>FB025x</c>: static analysis warnings</item>
 /// </list>
 /// </summary>
 public static class DiagnosticCatalog
 {
     private const DiagnosticSeverity Error = DiagnosticSeverity.Error;
+    private const DiagnosticSeverity Warning = DiagnosticSeverity.Warning;
 
     // ---- lexer ----
 
@@ -60,11 +61,47 @@ public static class DiagnosticCatalog
     public static readonly DiagnosticDescriptor ReturnNotLast =
         new("FB0106", Error, "'return' precisa ser o último statement do bloco (use 'do return end' para sair no meio)");
 
+    // ---- static analysis: errors (FB020x) ----
+
+    public static readonly DiagnosticDescriptor BreakOutsideLoop =
+        new("FB0201", Error, "'break' fora de um laço");
+
+    public static readonly DiagnosticDescriptor GotoWithoutLabel =
+        new("FB0202", Error, "não existe um label '{0}' visível para este 'goto'");
+
+    public static readonly DiagnosticDescriptor GotoIntoLocalScope =
+        new("FB0203", Error, "o 'goto {0}' pula para dentro do escopo do local '{1}'");
+
+    public static readonly DiagnosticDescriptor DuplicateLabel =
+        new("FB0204", Error, "o label '{0}' já existe neste bloco (linha {1})");
+
+    public static readonly DiagnosticDescriptor VarargOutsideVarargFunction =
+        new("FB0205", Error, "'...' só pode ser usado numa função que tem '...' nos parâmetros");
+
+    public static readonly DiagnosticDescriptor TooManyLocals =
+        new("FB0206", Error, "mais de {0} variáveis locais ativas ao mesmo tempo nesta função");
+
+    public static readonly DiagnosticDescriptor TooManyUpvalues =
+        new("FB0207", Error, "esta função usa mais de {0} variáveis de funções de fora (upvalues)");
+
+    // ---- static analysis: warnings (FB025x) ----
+
+    public static readonly DiagnosticDescriptor UndefinedGlobal =
+        new("FB0250", Warning, "a global '{0}' é lida, mas nunca recebe valor no programa{1}");
+
+    public static readonly DiagnosticDescriptor UnimplementedApiFunction =
+        new("FB0251", Warning, "'{0}' é da API do PICO-8, mas ainda não existe no Ferbento");
+
+    public static readonly DiagnosticDescriptor NumberWrapsAround =
+        new("FB0252", Warning, "o número {0} não cabe no 16.16 e vira {1}");
+
     /// <summary>All descriptors, for documentation and for the uniqueness test.</summary>
     public static IReadOnlyList<DiagnosticDescriptor> All { get; } =
     [
         UnexpectedCharacter, UnterminatedString, InvalidEscape, MalformedNumber, UnterminatedLongString,
         UnterminatedLongComment, DecimalEscapeTooLarge, NumberOutOfRange,
         Expected, ExpectedClosing, ExpectedExpression, InvalidAssignmentTarget, NotAStatement, ReturnNotLast,
+        BreakOutsideLoop, GotoWithoutLabel, GotoIntoLocalScope, DuplicateLabel, VarargOutsideVarargFunction,
+        TooManyLocals, TooManyUpvalues, UndefinedGlobal, UnimplementedApiFunction, NumberWrapsAround,
     ];
 }

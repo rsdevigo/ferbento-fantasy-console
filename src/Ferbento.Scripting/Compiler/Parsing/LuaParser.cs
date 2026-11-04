@@ -7,6 +7,9 @@ namespace Ferbento.Scripting.Compiler.Parsing;
 /// <summary>Result of parsing: the IR (partial when there are errors), the diagnostics and the tokens.</summary>
 public sealed record ParseResult(IrChunk Chunk, ImmutableArray<Diagnostic> Diagnostics, ImmutableArray<Token> Tokens)
 {
+    /// <summary>The comments of the source, in order (used by <c>fb-ignore</c>).</summary>
+    public ImmutableArray<LuaComment> Comments { get; init; } = [];
+
     public bool HasErrors => Diagnostics.Any(d => d.IsError);
 }
 
@@ -42,10 +45,14 @@ public sealed class LuaParser
     public static ParseResult Parse(string source, string? file = null)
     {
         var diagnostics = new List<Diagnostic>();
-        var tokens = LuaLexer.Tokenize(source, file, diagnostics);
+        var comments = new List<LuaComment>();
+        var tokens = LuaLexer.Tokenize(source, file, diagnostics, comments);
         var parser = new LuaParser(tokens, diagnostics);
         var chunk = parser.ParseChunk();
-        return new ParseResult(chunk, [.. diagnostics.OrderBy(d => d.Span.Line).ThenBy(d => d.Span.Column)], tokens);
+        return new ParseResult(chunk, [.. diagnostics.OrderBy(d => d.Span.Line).ThenBy(d => d.Span.Column)], tokens)
+        {
+            Comments = [.. comments],
+        };
     }
 
     // ---- token helpers ----

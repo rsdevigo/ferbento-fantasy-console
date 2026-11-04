@@ -112,3 +112,9 @@ public readonly record struct Token(
         _ => kind.ToString(),
     };
 }
+
+/// <summary>
+/// A comment, without its <c>--</c>/<c>//</c> marker (or the long brackets). <see cref="OnOwnLine"/> is true
+/// when no token comes before it on its first line.
+/// </summary>
+public sealed record LuaComment(string Text, SourceSpan Span, bool OnOwnLine);
