@@ -115,7 +115,10 @@ public sealed class ScriptInterpreter
             case GDExpressionStatement exprStmt:
                 if (exprStmt.Expression is GDReturnExpression retExpr)
                     throw new ReturnSignal(retExpr.Expression != null ? Evaluate(retExpr.Expression) : ScriptValue.Nil);
-                return Evaluate(exprStmt.Expression);
+                // The value of an expression statement is discarded: returning it would make
+                // ExecuteBlock end the function early (BUG-003).
+                Evaluate(exprStmt.Expression);
+                return ScriptValue.Nil;
 
             case GDIfStatement ifStmt:
                 return ExecuteIf(ifStmt);
