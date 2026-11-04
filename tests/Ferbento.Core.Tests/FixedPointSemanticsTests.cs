@@ -178,3 +178,24 @@ public class FixedPointSemanticsTests
         Assert.Null(ex);
     }
 }
+
+// Regression test for BUG-002.
+public class FixedPointCultureTests
+{
+    [Theory]
+    [InlineData("pt-BR")]
+    [InlineData("de-DE")]
+    public void ToString_UsesDecimalPoint(string culture)
+    {
+        var previous = System.Globalization.CultureInfo.CurrentCulture;
+        System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo(culture);
+        try
+        {
+            Assert.Equal("0.5", Ferbento.Core.Math.FixedPoint.FromDouble(0.5).ToString());
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = previous;
+        }
+    }
+}

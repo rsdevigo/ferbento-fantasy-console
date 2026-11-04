@@ -60,7 +60,7 @@ public sealed class ScriptValue
     public override string ToString() => Type switch
     {
         ScriptValueType.Nil => "nil",
-        ScriptValueType.Number => AsNumber().ToString(),
+        ScriptValueType.Number => Vm.Pico8Ops.NumberToString(AsNumber()),
         ScriptValueType.String => (string)Data!,
         ScriptValueType.Bool => (bool)Data! ? "true" : "false",
         ScriptValueType.Table => "[table]",

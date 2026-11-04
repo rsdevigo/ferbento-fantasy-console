@@ -57,7 +57,8 @@ public readonly struct FixedPoint : IEquatable<FixedPoint>
     public bool Equals(FixedPoint other) => Raw == other.Raw;
     public override bool Equals(object? obj) => obj is FixedPoint fp && Equals(fp);
     public override int GetHashCode() => Raw;
-    public override string ToString() => ToDouble().ToString("0.####");
+    public override string ToString() =>
+        ToDouble().ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
 
     public static FixedPoint Abs(FixedPoint x) => new(System.Math.Abs(x.Raw));
     public static FixedPoint Min(FixedPoint a, FixedPoint b) => a.Raw <= b.Raw ? a : b;
