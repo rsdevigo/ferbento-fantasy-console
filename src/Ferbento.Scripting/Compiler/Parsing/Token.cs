@@ -6,6 +6,13 @@ namespace Ferbento.Scripting.Compiler.Parsing;
 public enum TokenKind
 {
     EndOfFile,
+
+    /// <summary>
+    /// End of a line that closes a short <c>if</c>/<c>while</c> or a <c>?</c>. The lexer never produces
+    /// it: the parser inserts it at the first newline after one of those constructs, like z8lua.
+    /// </summary>
+    EndOfLine,
+
     Name,
     Number,
     String,
@@ -26,6 +33,14 @@ public enum TokenKind
     // punctuation
     LeftParen, RightParen, LeftBrace, RightBrace, LeftBracket, RightBracket,
     DoubleColon, Semicolon, Colon, Comma, Dot, DotDot, Ellipsis,
+
+    // PICO-8: peek operators (@ peek, % peek2, $ peek4) and ? (print)
+    At, Dollar, Question,
+
+    // PICO-8 compound assignment, in the same order as their binary operators
+    PlusAssign, MinusAssign, StarAssign, SlashAssign, PercentAssign, CaretAssign, BackslashAssign,
+    AmpersandAssign, PipeAssign, BitXorAssign, ShiftLeftAssign, ShiftRightAssign, ShiftRightLogicalAssign,
+    RotateLeftAssign, RotateRightAssign, ConcatAssign,
 }
 
 /// <summary>
@@ -42,10 +57,14 @@ public readonly record struct Token(
     string? StringValue = null,
     FixedPoint NumberValue = default)
 {
+    /// <summary>True when a newline (outside long strings and comments) comes between this token and the previous one.</summary>
+    public bool NewlineBefore { get; init; }
+
     /// <summary>How the token is shown in error messages: <c>'end'</c>, <c>o nome 'x'</c>, <c>o fim do arquivo</c>.</summary>
     public string Describe() => Kind switch
     {
         TokenKind.EndOfFile => "o fim do arquivo",
+        TokenKind.EndOfLine => "o fim da linha",
         TokenKind.Name => $"o nome '{Text}'",
         TokenKind.Number => $"o número {Text}",
         TokenKind.String => "uma string",
@@ -55,6 +74,7 @@ public readonly record struct Token(
     public static string Describe(TokenKind kind) => kind switch
     {
         TokenKind.EndOfFile => "o fim do arquivo",
+        TokenKind.EndOfLine => "o fim da linha",
         TokenKind.Name => "um nome",
         TokenKind.Number => "um número",
         TokenKind.String => "uma string",
@@ -82,6 +102,13 @@ public readonly record struct Token(
         TokenKind.RightBrace => "}", TokenKind.LeftBracket => "[", TokenKind.RightBracket => "]",
         TokenKind.DoubleColon => "::", TokenKind.Semicolon => ";", TokenKind.Colon => ":",
         TokenKind.Comma => ",", TokenKind.Dot => ".", TokenKind.DotDot => "..", TokenKind.Ellipsis => "...",
+        TokenKind.At => "@", TokenKind.Dollar => "$", TokenKind.Question => "?",
+        TokenKind.PlusAssign => "+=", TokenKind.MinusAssign => "-=", TokenKind.StarAssign => "*=",
+        TokenKind.SlashAssign => "/=", TokenKind.PercentAssign => "%=", TokenKind.CaretAssign => "^=",
+        TokenKind.BackslashAssign => "\\=", TokenKind.AmpersandAssign => "&=", TokenKind.PipeAssign => "|=",
+        TokenKind.BitXorAssign => "^^=", TokenKind.ShiftLeftAssign => "<<=", TokenKind.ShiftRightAssign => ">>=",
+        TokenKind.ShiftRightLogicalAssign => ">>>=", TokenKind.RotateLeftAssign => "<<>=",
+        TokenKind.RotateRightAssign => ">><=", TokenKind.ConcatAssign => "..=",
         _ => kind.ToString(),
     };
 }

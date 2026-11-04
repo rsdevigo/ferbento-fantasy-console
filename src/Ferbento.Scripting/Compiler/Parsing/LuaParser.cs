@@ -26,6 +26,11 @@ public sealed class LuaParser
     private int _pos;
     private int _lastErrorPos = -1;
 
+    // Virtual end-of-line token for short 'if'/'while' and '?': it sits before token _eolAt while
+    // at least one of those constructs is open (_shortDepth > 0). See ArmEndOfLine.
+    private int _eolAt = -1;
+    private int _shortDepth;
+
     private sealed class SyntaxError : Exception;
 
     private LuaParser(ImmutableArray<Token> tokens, List<Diagnostic> diagnostics)
@@ -45,17 +50,99 @@ public sealed class LuaParser
 
     // ---- token helpers ----
 
-    private Token Current => _tokens[_pos];
+    private bool AtEndOfLine => _shortDepth > 0 && _eolAt == _pos;
 
-    private Token PeekToken(int offset) => _tokens[Math.Min(_pos + offset, _tokens.Length - 1)];
+    private Token Current => AtEndOfLine ? EndOfLineToken() : _tokens[_pos];
+
+    private Token EndOfLineToken()
+    {
+        var previous = _tokens[Math.Max(_pos - 1, 0)];
+        return new Token(TokenKind.EndOfLine, "", previous.Span, previous.Start + previous.Length, 0);
+    }
+
+    /// <summary>Token <paramref name="offset"/> positions ahead, counting the virtual end of line.</summary>
+    private Token PeekToken(int offset)
+    {
+        if (_shortDepth > 0 && _eolAt >= _pos)
+        {
+            var eolOffset = _eolAt - _pos;
+            if (offset == eolOffset) return EndOfLineToken();
+            if (offset > eolOffset) offset--;
+        }
+        return _tokens[Math.Min(_pos + offset, _tokens.Length - 1)];
+    }
 
     private bool Check(TokenKind kind) => Current.Kind == kind;
 
     private Token Advance()
     {
         var token = Current;
-        if (_pos < _tokens.Length - 1) _pos++;
+        if (AtEndOfLine)
+            _eolAt = -1;
+        else if (_pos < _tokens.Length - 1)
+            _pos++;
         return token;
+    }
+
+    /// <summary>
+    /// Like z8lua's <c>emiteol</c>: the next newline after token <paramref name="afterIndex"/> becomes an
+    /// end-of-line token. If one is already pending (nested short constructs), it is shared.
+    /// </summary>
+    private void ArmEndOfLine(int afterIndex)
+    {
+        if (_eolAt >= 0) return;
+        for (var k = afterIndex + 1; k < _tokens.Length; k++)
+        {
+            if (!_tokens[k].NewlineBefore) continue;
+            _eolAt = k;
+            return;
+        }
+    }
+
+    private void EnterShort() => _shortDepth++;
+
+    private void LeaveShort()
+    {
+        if (--_shortDepth == 0) _eolAt = -1;
+    }
+
+    /// <summary>
+    /// z8lua's rule for a short 'if'/'while': the condition starts with '(' and its parentheses are
+    /// balanced at the token after it, with no other parenthesized group after the first.
+    /// </summary>
+    private bool ConditionIsParenthesized(int conditionStart)
+    {
+        var braces = _tokens[conditionStart].Kind == TokenKind.LeftParen ? 1 : -1;
+        for (var i = conditionStart + 1; i <= _pos; i++)
+        {
+            if (_tokens[i].Kind == TokenKind.RightParen) braces--;
+            else if (_tokens[i].Kind == TokenKind.LeftParen) braces += braces > 0 ? 1 : -1;
+        }
+        return braces == 0;
+    }
+
+    /// <summary>
+    /// After the condition of an 'if' or 'while': decides between the short form (body ends at the end
+    /// of the line) and the normal one (expects <paramref name="normalKeyword"/>).
+    /// </summary>
+    private bool BeginBody(Token keyword, int conditionStart, TokenKind normalKeyword)
+    {
+        var isShort = !Check(normalKeyword) && !Check(TokenKind.EndOfFile) && !Check(TokenKind.EndOfLine)
+            && ConditionIsParenthesized(conditionStart) && Current.Span.Line == keyword.Span.Line;
+        if (!isShort)
+        {
+            Expect(normalKeyword);
+            return false;
+        }
+        EnterShort();
+        ArmEndOfLine(_pos - 1);
+        return true;
+    }
+
+    /// <summary>A short body ends at the end of the line, the end of the file, or a closer of an outer block.</summary>
+    private void EndShortBody()
+    {
+        if (!IsBlockEnd()) throw Error(DiagnosticCatalog.Expected, Current, "o fim da linha", Current.Describe());
     }
 
     private bool Accept(TokenKind kind)
@@ -116,7 +203,7 @@ public sealed class LuaParser
     }
 
     private bool IsBlockEnd() => Current.Kind is TokenKind.EndOfFile or TokenKind.End or TokenKind.Else
-        or TokenKind.Elseif or TokenKind.Until;
+        or TokenKind.Elseif or TokenKind.Until or TokenKind.EndOfLine;
 
     private ImmutableArray<IrStmt> ParseBlock()
     {
@@ -160,7 +247,8 @@ public sealed class LuaParser
                 case TokenKind.Local or TokenKind.Function or TokenKind.If or TokenKind.While or TokenKind.For
                     or TokenKind.Repeat or TokenKind.Return or TokenKind.Do or TokenKind.Break or TokenKind.Goto
                     or TokenKind.DoubleColon or TokenKind.Semicolon:
-                case TokenKind.End or TokenKind.Else or TokenKind.Elseif or TokenKind.Until:
+                case TokenKind.End or TokenKind.Else or TokenKind.Elseif or TokenKind.Until or TokenKind.EndOfLine
+                    or TokenKind.Question:
                     return;
                 case TokenKind.Name when Current.Span.Line > errorLine:
                     return;
@@ -203,14 +291,10 @@ public sealed class LuaParser
             }
 
             case TokenKind.While:
-            {
-                Advance();
-                var condition = ParseExpression();
-                Expect(TokenKind.Do);
-                var body = ParseBlock();
-                ExpectClosing(TokenKind.End, token);
-                return At(new IrWhile(condition, body), token);
-            }
+                return ParseWhile();
+
+            case TokenKind.Question:
+                return ParseShortPrint();
 
             case TokenKind.Repeat:
             {
@@ -244,31 +328,81 @@ public sealed class LuaParser
         }
     }
 
+    private IrWhile ParseWhile()
+    {
+        var whileToken = Advance();
+        var conditionStart = _pos;
+        var condition = ParseExpression();
+        var isShort = BeginBody(whileToken, conditionStart, TokenKind.Do);
+        try
+        {
+            var body = ParseBlock();
+            if (isShort) EndShortBody();
+            else ExpectClosing(TokenKind.End, whileToken);
+            return At(new IrWhile(condition, body), whileToken);
+        }
+        finally
+        {
+            if (isShort) LeaveShort();
+        }
+    }
+
+    /// <summary>PICO-8 <c>?a, b</c>: <c>print(a, b)</c> up to the end of the line.</summary>
+    private IrCallStmt ParseShortPrint()
+    {
+        var questionToken = Current;
+        EnterShort();
+        try
+        {
+            ArmEndOfLine(_pos);
+            Advance();
+            var arguments = Check(TokenKind.EndOfLine) || Check(TokenKind.EndOfFile) ? [] : ParseExpressionList();
+            if (!Check(TokenKind.EndOfLine) && !Check(TokenKind.EndOfFile))
+                throw Error(DiagnosticCatalog.Expected, Current, "o fim da linha depois do '?'", Current.Describe());
+            var print = At(new IrName("print"), questionToken);
+            return At(new IrCallStmt(At(new IrCall(print, arguments), questionToken)), questionToken);
+        }
+        finally
+        {
+            LeaveShort();
+        }
+    }
+
     private IrIf ParseIf()
     {
         var ifToken = Advance();
         var clauses = ImmutableArray.CreateBuilder<IrIfClause>();
         ImmutableArray<IrStmt>? elseBlock = null;
 
-        var clauseToken = ifToken;
-        while (true)
+        // Only the first condition can open a short 'if'; 'elseif' always needs 'then', as in z8lua.
+        var conditionStart = _pos;
+        var firstCondition = ParseExpression();
+        var isShort = BeginBody(ifToken, conditionStart, TokenKind.Then);
+        try
         {
-            var condition = ParseExpression();
-            Expect(TokenKind.Then);
-            clauses.Add(At(new IrIfClause(condition, ParseBlock()), clauseToken));
-
-            if (Check(TokenKind.Elseif))
+            var clauseToken = ifToken;
+            var condition = firstCondition;
+            while (true)
             {
+                clauses.Add(At(new IrIfClause(condition, ParseBlock()), clauseToken));
+
+                if (!Check(TokenKind.Elseif)) break;
                 clauseToken = Advance();
-                continue;
+                condition = ParseExpression();
+                Expect(TokenKind.Then);
             }
+
             // An empty 'else' means nothing; dropping it keeps the IR canonical.
             if (Accept(TokenKind.Else) && ParseBlock() is { IsEmpty: false } block) elseBlock = block;
-            break;
-        }
 
-        ExpectClosing(TokenKind.End, ifToken);
-        return At(new IrIf(clauses.ToImmutable(), elseBlock), ifToken);
+            if (isShort) EndShortBody();
+            else ExpectClosing(TokenKind.End, ifToken);
+            return At(new IrIf(clauses.ToImmutable(), elseBlock), ifToken);
+        }
+        finally
+        {
+            if (isShort) LeaveShort();
+        }
     }
 
     private IrStmt ParseFor()
@@ -382,6 +516,13 @@ public sealed class LuaParser
             }
         }
 
+        if (CompoundOperator(Current.Kind) is { } compound)
+        {
+            if (!firstAssignable) throw Error(DiagnosticCatalog.InvalidAssignmentTarget, startToken);
+            Advance();
+            return At(new IrCompoundAssign(first, compound, ParseExpression()), startToken);
+        }
+
         if (first is IrCallExpr call) return At(new IrCallStmt(call), startToken);
         throw Error(DiagnosticCatalog.NotAStatement, startToken);
     }
@@ -428,6 +569,30 @@ public sealed class LuaParser
         TokenKind.Not => IrUnaryOp.Not,
         TokenKind.Hash => IrUnaryOp.Length,
         TokenKind.Tilde => IrUnaryOp.BitNot,
+        TokenKind.At => IrUnaryOp.Peek,
+        TokenKind.Percent => IrUnaryOp.Peek2,
+        TokenKind.Dollar => IrUnaryOp.Peek4,
+        _ => null,
+    };
+
+    private static IrBinaryOp? CompoundOperator(TokenKind kind) => kind switch
+    {
+        TokenKind.PlusAssign => IrBinaryOp.Add,
+        TokenKind.MinusAssign => IrBinaryOp.Subtract,
+        TokenKind.StarAssign => IrBinaryOp.Multiply,
+        TokenKind.SlashAssign => IrBinaryOp.Divide,
+        TokenKind.PercentAssign => IrBinaryOp.Modulo,
+        TokenKind.CaretAssign => IrBinaryOp.Power,
+        TokenKind.BackslashAssign => IrBinaryOp.IntDivide,
+        TokenKind.AmpersandAssign => IrBinaryOp.BitAnd,
+        TokenKind.PipeAssign => IrBinaryOp.BitOr,
+        TokenKind.BitXorAssign => IrBinaryOp.BitXor,
+        TokenKind.ShiftLeftAssign => IrBinaryOp.ShiftLeft,
+        TokenKind.ShiftRightAssign => IrBinaryOp.ShiftRight,
+        TokenKind.ShiftRightLogicalAssign => IrBinaryOp.LogicalShiftRight,
+        TokenKind.RotateLeftAssign => IrBinaryOp.RotateLeft,
+        TokenKind.RotateRightAssign => IrBinaryOp.RotateRight,
+        TokenKind.ConcatAssign => IrBinaryOp.Concat,
         _ => null,
     };
 

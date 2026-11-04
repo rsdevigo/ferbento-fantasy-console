@@ -51,4 +51,10 @@ public enum IrUnaryOp
     Length,
     /// <summary><c>~</c></summary>
     BitNot,
+    /// <summary><c>@</c> (PICO-8 <c>peek</c>)</summary>
+    Peek,
+    /// <summary><c>%</c> (PICO-8 <c>peek2</c>)</summary>
+    Peek2,
+    /// <summary><c>$</c> (PICO-8 <c>peek4</c>)</summary>
+    Peek4,
 }

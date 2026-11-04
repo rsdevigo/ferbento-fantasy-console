@@ -87,6 +87,15 @@ public sealed class LuaPrinter
                 StatementLine($"{ExprList(assign.Targets)} = {ExprList(assign.Values)}");
                 break;
 
+            case IrCompoundAssign compound:
+                if (compound.Target is not (IrName or IrIndex))
+                    throw Invalid(compound, $"cannot assign to {compound.Target.GetType().Name}");
+                if (compound.Operator is IrBinaryOp.Or or IrBinaryOp.And or IrBinaryOp.Less or IrBinaryOp.Greater
+                    or IrBinaryOp.LessEqual or IrBinaryOp.GreaterEqual or IrBinaryOp.Equal or IrBinaryOp.NotEqual)
+                    throw Invalid(compound, $"{compound.Operator} has no compound assignment form");
+                StatementLine($"{Expr(compound.Target).Text} {BinaryInfo(compound.Operator).Symbol}= {Expr(compound.Value).Text}");
+                break;
+
             case IrCallStmt call:
                 StatementLine(Expr(call.Call).Text);
                 break;
@@ -331,6 +340,9 @@ public sealed class LuaPrinter
             IrUnaryOp.Negate => operandText.StartsWith('-') ? $"- {operandText}" : $"-{operandText}",
             IrUnaryOp.BitNot => operandText.StartsWith('~') ? $"~ {operandText}" : $"~{operandText}",
             IrUnaryOp.Length => $"#{operandText}",
+            IrUnaryOp.Peek => $"@{operandText}",
+            IrUnaryOp.Peek2 => $"%{operandText}",
+            IrUnaryOp.Peek4 => $"${operandText}",
             _ => throw Invalid(unary, $"unsupported unary operator {unary.Operator}"),
         };
         return new(text, PrecUnary, false);
