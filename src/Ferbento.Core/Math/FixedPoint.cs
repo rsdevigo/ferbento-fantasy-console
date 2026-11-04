@@ -26,11 +26,26 @@ public readonly struct FixedPoint : IEquatable<FixedPoint>
     public static FixedPoint operator +(FixedPoint a, FixedPoint b) => new(a.Raw + b.Raw);
     public static FixedPoint operator -(FixedPoint a, FixedPoint b) => new(a.Raw - b.Raw);
     public static FixedPoint operator *(FixedPoint a, FixedPoint b) => new((int)((long)a.Raw * b.Raw >> FractionBits));
+    /// <summary>
+    /// PICO-8 division. Division by zero gives 0x7fff.ffff when the dividend is &gt;= 0 and
+    /// -0x7fff.ffff when it is negative (PICO-8 manual). Other overflows wrap to 32 bits.
+    /// </summary>
     public static FixedPoint operator /(FixedPoint a, FixedPoint b) =>
-        b.Raw == 0 ? FromInt(0) : new((int)(((long)a.Raw << FractionBits) / b.Raw));
+        b.Raw == 0
+            ? new(a.Raw >= 0 ? RawMax : -RawMax)
+            : new(unchecked((int)(((long)a.Raw << FractionBits) / b.Raw)));
 
-    public static FixedPoint operator %(FixedPoint a, FixedPoint b) =>
-        b.Raw == 0 ? a : new(a.Raw % b.Raw);
+    /// <summary>
+    /// Lua/PICO-8 modulo: <c>a - flr(a/b)*b</c>, so the result takes the divisor's sign.
+    /// <c>x % 0</c> gives 0.
+    /// </summary>
+    public static FixedPoint operator %(FixedPoint a, FixedPoint b)
+    {
+        if (b.Raw == 0) return new(0);
+        var r = (long)a.Raw % b.Raw;
+        if (r != 0 && (r < 0) != (b.Raw < 0)) r += b.Raw;
+        return new((int)r);
+    }
 
     public static FixedPoint operator -(FixedPoint a) => new(-a.Raw);
 
@@ -42,7 +57,8 @@ public readonly struct FixedPoint : IEquatable<FixedPoint>
     public bool Equals(FixedPoint other) => Raw == other.Raw;
     public override bool Equals(object? obj) => obj is FixedPoint fp && Equals(fp);
     public override int GetHashCode() => Raw;
-    public override string ToString() => ToDouble().ToString("0.####");
+    public override string ToString() =>
+        ToDouble().ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
 
     public static FixedPoint Abs(FixedPoint x) => new(System.Math.Abs(x.Raw));
     public static FixedPoint Min(FixedPoint a, FixedPoint b) => a.Raw <= b.Raw ? a : b;
@@ -111,4 +127,41 @@ public readonly struct FixedPoint : IEquatable<FixedPoint>
     public static int Bnot(int a) => ~a;
     public static int Shl(int a, int b) => a << (b & 31);
     public static int Shr(int a, int b) => a >> (b & 31);
+
+    /// <summary>PICO-8 <c>\</c>: <c>flr(a / b)</c>, including the division-by-zero rule.</summary>
+    public static FixedPoint IntDivide(FixedPoint a, FixedPoint b) => Floor(a / b);
+
+    /// <summary>
+    /// PICO-8 <c>^</c>. Computed in floating point (as z8lua does) and wrapped to 32 bits.
+    /// </summary>
+    public static FixedPoint Pow(FixedPoint a, FixedPoint b) =>
+        FromDoubleWrapped(System.Math.Pow(a.ToDouble(), b.ToDouble()));
+
+    /// <summary>Converts a double to 16.16, wrapping to 32 bits instead of being undefined on overflow.</summary>
+    public static FixedPoint FromDoubleWrapped(double value)
+    {
+        if (double.IsNaN(value)) return new(0);
+        var scaled = System.Math.Round(value * RawOne, MidpointRounding.AwayFromZero);
+        if (scaled >= long.MaxValue) return new(RawMax);
+        if (scaled <= long.MinValue) return new(RawMin);
+        return new(unchecked((int)(long)scaled));
+    }
+
+    // Raw 32-bit shifts and rotations (PICO-8 shl/shr/lshr/rotl/rotr and << >> >>> <<> >><).
+    // The amount is an integer number of bits; negative amounts shift the other way.
+
+    public static FixedPoint ShiftLeft(FixedPoint x, int n) =>
+        n < 0 ? ShiftRightArithmetic(x, -n) : n >= 32 ? new(0) : new(x.Raw << n);
+
+    public static FixedPoint ShiftRightArithmetic(FixedPoint x, int n) =>
+        n < 0 ? ShiftLeft(x, -n) : n >= 32 ? new(x.Raw < 0 ? -1 : 0) : new(x.Raw >> n);
+
+    public static FixedPoint ShiftRightLogical(FixedPoint x, int n) =>
+        n < 0 ? ShiftLeft(x, -n) : n >= 32 ? new(0) : new((int)((uint)x.Raw >> n));
+
+    public static FixedPoint RotateLeft(FixedPoint x, int n) =>
+        new((int)System.Numerics.BitOperations.RotateLeft((uint)x.Raw, n & 31));
+
+    public static FixedPoint RotateRight(FixedPoint x, int n) =>
+        new((int)System.Numerics.BitOperations.RotateRight((uint)x.Raw, n & 31));
 }

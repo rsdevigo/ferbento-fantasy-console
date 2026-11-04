@@ -31,7 +31,8 @@ public static class StringApi
         env.Define("tonum", ScriptValue.Native(args =>
         {
             var str = args.Length > 0 ? args[0].AsString() : "0";
-            if (double.TryParse(str, out var d))
+            if (double.TryParse(str, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var d))
                 return ScriptValue.Number(d);
             return ScriptValue.Number(0);
         }));
