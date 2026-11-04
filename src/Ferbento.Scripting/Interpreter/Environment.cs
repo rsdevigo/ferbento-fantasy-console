@@ -30,5 +30,8 @@ public sealed class Environment
 
     public bool HasLocal(string name) => _values.ContainsKey(name);
 
+    /// <summary>Names defined directly in this environment (not in its parents).</summary>
+    public IEnumerable<string> Names => _values.Keys;
+
     public Environment Child() => new(this);
 }

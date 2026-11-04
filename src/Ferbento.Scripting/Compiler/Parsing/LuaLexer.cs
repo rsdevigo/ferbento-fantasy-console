@@ -60,18 +60,26 @@ public sealed partial class LuaLexer
     private int _line = 1;
     private int _lineStart;
     private bool _newlineSinceLastToken;
+    private readonly List<LuaComment>? _comments;
+    private int _lastTokenEndLine;
 
-    private LuaLexer(string source, string? file, List<Diagnostic> diagnostics)
+    private LuaLexer(string source, string? file, List<Diagnostic> diagnostics, List<LuaComment>? comments)
     {
         _source = source;
         _file = file;
         _diagnostics = diagnostics;
+        _comments = comments;
     }
 
     /// <summary>Tokenizes <paramref name="source"/>, adding any errors to <paramref name="diagnostics"/>.</summary>
-    public static ImmutableArray<Token> Tokenize(string source, string? file, List<Diagnostic> diagnostics)
+    public static ImmutableArray<Token> Tokenize(string source, string? file, List<Diagnostic> diagnostics) =>
+        Tokenize(source, file, diagnostics, null);
+
+    /// <summary>Same as the other overload, and also collects the comments into <paramref name="comments"/>.</summary>
+    public static ImmutableArray<Token> Tokenize(
+        string source, string? file, List<Diagnostic> diagnostics, List<LuaComment>? comments)
     {
-        var lexer = new LuaLexer(source, file, diagnostics);
+        var lexer = new LuaLexer(source, file, diagnostics, comments);
         lexer.Run();
         return lexer._tokens.ToImmutable();
     }
@@ -93,6 +101,7 @@ public sealed partial class LuaLexer
     {
         _tokens.Add(token with { NewlineBefore = _newlineSinceLastToken });
         _newlineSinceLastToken = false;
+        _lastTokenEndLine = _line;
     }
 
     private void Run()
@@ -160,7 +169,11 @@ public sealed partial class LuaLexer
             else if (c == '/' && Peek(1) == '/')
             {
                 // PICO-8 line comment.
+                var span = CurrentSpan;
+                _pos += 2;
+                var start = _pos;
                 while (!AtEnd && Current is not ('\n' or '\r')) _pos++;
+                AddComment(_source[start.._pos], span);
             }
             else if (c == '-' && Peek(1) == '-')
             {
@@ -168,12 +181,15 @@ public sealed partial class LuaLexer
                 _pos += 2;
                 if (Current == '[' && LongBracketLevel() is { } level)
                 {
-                    if (!SkipLongBracket(level, out _))
+                    if (!SkipLongBracket(level, out var content))
                         Report(DiagnosticCatalog.UnterminatedLongComment, span, ClosingBracket(level));
+                    AddComment(content, span);
                 }
                 else
                 {
+                    var start = _pos;
                     while (!AtEnd && Current is not ('\n' or '\r')) _pos++;
+                    AddComment(_source[start.._pos], span);
                 }
             }
             else
@@ -182,6 +198,9 @@ public sealed partial class LuaLexer
             }
         }
     }
+
+    private void AddComment(string text, SourceSpan span) =>
+        _comments?.Add(new LuaComment(text, span, OnOwnLine: _tokens.Count == 0 || _lastTokenEndLine != span.Line));
 
     // ---- long brackets: [[ ]], [==[ ]==] ----
 
