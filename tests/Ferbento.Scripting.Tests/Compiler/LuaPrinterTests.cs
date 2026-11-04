@@ -407,4 +407,39 @@ public class LuaPrinterTests
             "function _draw()\n  cls()\n  print(\"x=\" .. x, 0, 0, 7)\nend\n",
             LuaPrinter.Print(chunk));
     }
+
+    // ---- nodes added by the parser (story 003) ----
+
+    [Fact]
+    public void Repeat_MethodCall_Vararg_Paren()
+    {
+        Assert.Equal("repeat\n  yield()\nuntil done\n",
+            P(new IrRepeat([new IrCallStmt(Call("yield"))], N("done"))));
+        Assert.Equal("obj:move(1, 2)\n",
+            P(new IrCallStmt(new IrMethodCall(N("obj"), "move", [Num(1), Num(2)]))));
+        Assert.Equal("(\"s\"):len()", P(new IrMethodCall(S("s"), "len", [])));
+        Assert.Equal("(f())", P(new IrParen(Call("f"))));
+        Assert.Equal("function(a, ...)\n  return ...\nend",
+            P(new IrFunction(["a"], [new IrReturn([new IrVararg()])]) { IsVararg = true }));
+    }
+
+    [Fact]
+    public void MethodFunction_HidesSelf()
+    {
+        var method = new IrFunctionStmt(["enemy", "hit"], new IrFunction(["self", "dmg"], [])) { IsMethod = true };
+        Assert.Equal("function enemy:hit(dmg)\nend\n", P(method));
+    }
+
+    [Fact]
+    public void MethodFunction_WithoutSelfOrOwner_Throws()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            P(new IrFunctionStmt(["enemy", "hit"], new IrFunction(["dmg"], [])) { IsMethod = true }));
+        Assert.Throws<ArgumentException>(() =>
+            P(new IrFunctionStmt(["hit"], new IrFunction(["self"], [])) { IsMethod = true }));
+    }
+
+    [Fact]
+    public void MethodCall_InvalidName_Throws() =>
+        Assert.Throws<ArgumentException>(() => P(new IrMethodCall(N("o"), "end", [])));
 }

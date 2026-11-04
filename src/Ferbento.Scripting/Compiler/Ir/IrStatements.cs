@@ -14,7 +14,7 @@ public sealed record IrLocal(ImmutableArray<string> Names, ImmutableArray<IrExpr
 public sealed record IrAssign(ImmutableArray<IrExpr> Targets, ImmutableArray<IrExpr> Values) : IrStmt;
 
 /// <summary>A call used as a statement.</summary>
-public sealed record IrCallStmt(IrCall Call) : IrStmt;
+public sealed record IrCallStmt(IrCallExpr Call) : IrStmt;
 
 public sealed record IrIfClause(IrExpr Condition, ImmutableArray<IrStmt> Body) : IrNode;
 
@@ -22,6 +22,9 @@ public sealed record IrIfClause(IrExpr Condition, ImmutableArray<IrStmt> Body) :
 public sealed record IrIf(ImmutableArray<IrIfClause> Clauses, ImmutableArray<IrStmt>? Else) : IrStmt;
 
 public sealed record IrWhile(IrExpr Condition, ImmutableArray<IrStmt> Body) : IrStmt;
+
+/// <summary><c>repeat … until cond</c>. The condition sees the body's locals.</summary>
+public sealed record IrRepeat(ImmutableArray<IrStmt> Body, IrExpr Condition) : IrStmt;
 
 /// <summary><c>for v = start, limit[, step] do … end</c> (limit inclusive).</summary>
 public sealed record IrNumericFor(
@@ -42,8 +45,15 @@ public sealed record IrGoto(string Label) : IrStmt;
 
 public sealed record IrLabel(string Name) : IrStmt;
 
-/// <summary><c>function a.b.c(params) … end</c>: assigns to a global (or a field path).</summary>
-public sealed record IrFunctionStmt(ImmutableArray<string> NamePath, IrFunction Function) : IrStmt;
+/// <summary>
+/// <c>function a.b.c(params) … end</c>: assigns to a global (or a field path).
+/// With <see cref="IsMethod"/>, it is <c>function a.b:c(params)</c>, and the first parameter of
+/// <see cref="Function"/> is the implicit <c>self</c>.
+/// </summary>
+public sealed record IrFunctionStmt(ImmutableArray<string> NamePath, IrFunction Function) : IrStmt
+{
+    public bool IsMethod { get; init; }
+}
 
 /// <summary><c>local function f(params) … end</c>.</summary>
 public sealed record IrLocalFunction(string Name, IrFunction Function) : IrStmt;

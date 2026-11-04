@@ -101,6 +101,12 @@ public sealed class LuaPrinter
                 Line("end");
                 break;
 
+            case IrRepeat repeat:
+                Line("repeat");
+                WriteIndentedBlock(repeat.Body);
+                Line($"until {Expr(repeat.Condition).Text}");
+                break;
+
             case IrNumericFor numericFor:
                 RequireName(numericFor.Variable, numericFor);
                 var range = $"{Expr(numericFor.Start).Text}, {Expr(numericFor.Limit).Text}";
@@ -149,7 +155,19 @@ public sealed class LuaPrinter
                 if (function.NamePath.IsDefaultOrEmpty)
                     throw Invalid(function, "function statement needs a name");
                 RequireNames(function.NamePath, function);
-                WriteFunction($"function {string.Join(".", function.NamePath)}", function.Function);
+                if (function.IsMethod)
+                {
+                    if (function.NamePath.Length < 2)
+                        throw Invalid(function, "method function needs a table and a method name");
+                    if (function.Function.Parameters.IsDefaultOrEmpty || function.Function.Parameters[0] != "self")
+                        throw Invalid(function, "method function must have 'self' as its first parameter");
+                    var owner = string.Join(".", function.NamePath.Take(function.NamePath.Length - 1));
+                    WriteFunction($"function {owner}:{function.NamePath[^1]}", function.Function, skipSelf: true);
+                }
+                else
+                {
+                    WriteFunction($"function {string.Join(".", function.NamePath)}", function.Function);
+                }
                 break;
 
             case IrLocalFunction localFunction:
@@ -186,10 +204,9 @@ public sealed class LuaPrinter
         Line("end");
     }
 
-    private void WriteFunction(string header, IrFunction function)
+    private void WriteFunction(string header, IrFunction function, bool skipSelf = false)
     {
-        RequireNames(function.Parameters, function);
-        Line($"{header}({string.Join(", ", function.Parameters)})");
+        Line($"{header}({ParameterList(function, skipSelf)})");
         WriteIndentedBlock(function.Body);
         Line("end");
     }
@@ -225,6 +242,13 @@ public sealed class LuaPrinter
                 return new($"{target}[{Expr(index.Key).Text}]", PrecAtom, true);
             case IrCall call:
                 return new($"{PrefixText(call.Callee)}({ExprList(call.Arguments)})", PrecAtom, true);
+            case IrMethodCall methodCall:
+                RequireName(methodCall.Method, methodCall);
+                return new($"{PrefixText(methodCall.Receiver)}:{methodCall.Method}({ExprList(methodCall.Arguments)})", PrecAtom, true);
+            case IrVararg:
+                return new("...", PrecAtom, false);
+            case IrParen paren:
+                return new($"({Expr(paren.Inner).Text})", PrecAtom, true);
             case IrFunction function:
                 return new(FunctionText(function), PrecAtom, false);
             case IrTable table:
@@ -245,13 +269,20 @@ public sealed class LuaPrinter
         return printed.IsPrefix ? printed.Text : $"({printed.Text})";
     }
 
-    private string FunctionText(IrFunction function)
+    private static string ParameterList(IrFunction function, bool skipSelf = false)
     {
         RequireNames(function.Parameters, function);
+        IEnumerable<string> names = function.Parameters.IsDefault ? [] : function.Parameters.Skip(skipSelf ? 1 : 0);
+        if (function.IsVararg) names = names.Append("...");
+        return string.Join(", ", names);
+    }
+
+    private string FunctionText(IrFunction function)
+    {
         var inner = new LuaPrinter { _indent = _indent + 1 };
         inner.WriteBlock(function.Body);
         var sb = new StringBuilder();
-        sb.Append($"function({string.Join(", ", function.Parameters)})\n");
+        sb.Append($"function({ParameterList(function)})\n");
         sb.Append(inner._out);
         for (var i = 0; i < _indent; i++) sb.Append(IndentUnit);
         sb.Append("end");
@@ -339,7 +370,7 @@ public sealed class LuaPrinter
     private static void RequireName(string name, IrNode node)
     {
         if (!LuaLiterals.IsIdentifier(name))
-            throw Invalid(node, $"'{name}' is not a valid Lua identifier (lowering must rename it)");
+            throw Invalid(node, $"'{name}' is not a valid Lua identifier");
     }
 
     private static void RequireNames(ImmutableArray<string> names, IrNode node)
