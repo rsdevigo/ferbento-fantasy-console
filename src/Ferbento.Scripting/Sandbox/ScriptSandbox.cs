@@ -30,7 +30,7 @@ public sealed class ScriptSandbox
 
     public void LoadSource(string source)
     {
-        var tokenCount = Pico8TokenCounter.Count(source);
+        var tokenCount = GdScriptTokenCounter.Count(source);
         if (tokenCount > _context.MaxTokens)
             throw new HardwareLimitException($"Script has {tokenCount} tokens, exceeds limit of {_context.MaxTokens}.");
         _context.TokenCount = tokenCount;

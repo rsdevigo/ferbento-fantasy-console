@@ -1,6 +1,11 @@
 namespace Ferbento.Scripting.Parser;
 
-public static class Pico8TokenCounter
+/// <summary>
+/// Counts tokens of the GDScript source run by the current interpreter. It only exists so that
+/// <c>ScriptSandbox</c> keeps its token limit until it moves to the Lua pipeline (story 012);
+/// the PICO-8 count is <see cref="Ferbento.Scripting.Compiler.Parsing.Pico8TokenCounter"/>.
+/// </summary>
+public static class GdScriptTokenCounter
 {
     public static int Count(string source)
     {
