@@ -442,4 +442,22 @@ public class LuaPrinterTests
     [Fact]
     public void MethodCall_InvalidName_Throws() =>
         Assert.Throws<ArgumentException>(() => P(new IrMethodCall(N("o"), "end", [])));
+
+    // ---- PICO-8 dialect (story 004) ----
+
+    [Fact]
+    public void CompoundAssign_And_PeekOperators()
+    {
+        Assert.Equal("t[i] += 1\n", P(new IrCompoundAssign(new IrIndex(N("t"), N("i")), IrBinaryOp.Add, Num(1))));
+        Assert.Equal("s ..= \"x\"\n", P(new IrCompoundAssign(N("s"), IrBinaryOp.Concat, S("x"))));
+        Assert.Equal("@a + %b + $c", P(B(IrBinaryOp.Add, B(IrBinaryOp.Add, U(IrUnaryOp.Peek, N("a")),
+            U(IrUnaryOp.Peek2, N("b"))), U(IrUnaryOp.Peek4, N("c")))));
+    }
+
+    [Fact]
+    public void CompoundAssign_Invalid_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => P(new IrCompoundAssign(Call("f"), IrBinaryOp.Add, Num(1))));
+        Assert.Throws<ArgumentException>(() => P(new IrCompoundAssign(N("x"), IrBinaryOp.Equal, Num(1))));
+    }
 }

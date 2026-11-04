@@ -80,9 +80,16 @@ public class LuaLexerTests
     [InlineData(".5", 0x8000)]
     [InlineData("5.", 5 << 16)]
     [InlineData("32767", 32767 << 16)]
-    [InlineData("1e2", 100 << 16)]
-    [InlineData("25e-1", 0x28000)]
     public void Numbers_Decimal(string text, int raw) => Assert.Equal(raw, Raw(text));
+
+    [Fact]
+    public void Numbers_NoExponent_LikeZ8lua()
+    {
+        // read_numeral only takes digits and dots, so 'e2' is a separate name.
+        var (tokens, diagnostics) = Lex("1e2");
+        Assert.Empty(diagnostics);
+        Assert.Equal([TokenKind.Number, TokenKind.Name], tokens.Select(t => t.Kind));
+    }
 
     [Fact]
     public void Numbers_Decimal_WrapAroundLikePico8()
@@ -93,11 +100,12 @@ public class LuaLexerTests
     }
 
     [Fact]
-    public void Numbers_Decimal_RoundToNearest()
+    public void Numbers_Decimal_TruncateLikeZ8lua()
     {
-        // 0.1 * 65536 = 6553.6. TODO conferir no z8lua (arredonda ou trunca?).
-        Assert.Equal(0x199a, Raw("0.1"));
-        Assert.Equal(1, Raw("0.00001"));
+        // fix32(double) is int32(int64(d * 65536)): 0.1 * 65536 = 6553.6 → 6553.
+        Assert.Equal(0x1999, Raw("0.1"));
+        Assert.Equal(0, Raw("0.00001"));
+        Assert.Equal(0x7fffffff, Raw("32767.99999"));
     }
 
     [Theory]
@@ -110,20 +118,30 @@ public class LuaLexerTests
     [InlineData("0xffff", -1 << 16)]
     [InlineData("0xffff.ffff", -1)]
     [InlineData("0x8000", int.MinValue)]
-    [InlineData("0x1p4", 16 << 16)]
     public void Numbers_Hex(string text, int raw) => Assert.Equal(raw, Raw(text));
 
     [Fact]
     public void Numbers_Hex_ExtraFractionDigitsAreDropped()
     {
-        // TODO conferir no z8lua.
+        // z8lua's readany stops counting after 4 hex fraction digits.
         Assert.Equal(0x12345, Raw("0x1.23456"));
     }
 
     [Theory]
+    [InlineData("0b1010", 10 << 16)]
+    [InlineData("0B1", 1 << 16)]
+    [InlineData("0b0.1", 0x8000)]
+    [InlineData("0b.01", 0x4000)]
+    [InlineData("0b1.0000000000000001", 0x10001)]
+    [InlineData("0b1111111111111111", -1 << 16)]
+    [InlineData("0b1.11111111111111111111", 0x1ffff)]
+    public void Numbers_Binary(string text, int raw) => Assert.Equal(raw, Raw(text));
+
+    [Theory]
     [InlineData("1..2")]
-    [InlineData("3e")]
     [InlineData("0x")]
+    [InlineData("0b")]
+    [InlineData("0b102")]
     [InlineData("1.2.3")]
     public void Numbers_Malformed(string text)
     {
@@ -233,7 +251,7 @@ public class LuaLexerTests
     [Fact]
     public void UnexpectedCharacter_IsReportedAndSkipped()
     {
-        var (tokens, diagnostics) = Lex("a $ b");
+        var (tokens, diagnostics) = Lex("a ` b");
         Assert.Equal("FB0001", Assert.Single(diagnostics).Code);
         Assert.Equal(["a", "b"], tokens.Select(t => t.Text));
     }

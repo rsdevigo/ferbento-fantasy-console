@@ -13,6 +13,13 @@ public sealed record IrLocal(ImmutableArray<string> Names, ImmutableArray<IrExpr
 /// <summary><c>a, t[k] = x, y</c>. Targets must be <see cref="IrName"/> or <see cref="IrIndex"/>.</summary>
 public sealed record IrAssign(ImmutableArray<IrExpr> Targets, ImmutableArray<IrExpr> Values) : IrStmt;
 
+/// <summary>
+/// PICO-8 <c>target op= value</c>. Not the same as <c>target = target op value</c>: the target's
+/// table and key are evaluated once (<c>t[f()] += 1</c> calls <c>f</c> once), and
+/// <see cref="Value"/> is a whole expression (<c>a *= b + c</c> is <c>a = a * (b + c)</c>), as in z8lua.
+/// </summary>
+public sealed record IrCompoundAssign(IrExpr Target, IrBinaryOp Operator, IrExpr Value) : IrStmt;
+
 /// <summary>A call used as a statement.</summary>
 public sealed record IrCallStmt(IrCallExpr Call) : IrStmt;
 
