@@ -195,6 +195,12 @@ public static class Pico8Ops
         return true;
     }
 
+    /// <summary>
+    /// Number coercion used outside arithmetic (the <c>for</c> loop): numbers as they are, strings
+    /// parsed as in <see cref="TryParseNumber"/>.
+    /// </summary>
+    public static bool TryToNumber(ScriptValue v, out FixedPoint n) => TryCoerceNumber(v, out n);
+
     // ---- Helpers ----------------------------------------------------------------------------
 
     private static ScriptValue Arith(ScriptValue a, ScriptValue b, Func<FixedPoint, FixedPoint, FixedPoint> op)

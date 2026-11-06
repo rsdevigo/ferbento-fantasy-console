@@ -36,6 +36,12 @@ public sealed class ScriptValue
     public static ScriptValue Table(ScriptTable t) => new(ScriptValueType.Table, t);
     public static ScriptValue Func(UserFunction f) => new(ScriptValueType.Function, f);
     public static ScriptValue Native(Func<ScriptValue[], ScriptValue> f) => new(ScriptValueType.NativeFunction, f);
+
+    /// <summary>A Lua function compiled for the VM (story 009).</summary>
+    public static ScriptValue Func(Vm.LuaClosure c) => new(ScriptValueType.Function, c);
+
+    /// <summary>A native function with any number of results (e.g. <c>coresume</c>). VM only.</summary>
+    public static ScriptValue NativeMulti(Func<ScriptValue[], ScriptValue[]> f) => new(ScriptValueType.NativeFunction, f);
     public static ScriptValue Co(Coroutine c) => new(ScriptValueType.Coroutine, c);
 
     public FixedPoint AsNumber() => Type == ScriptValueType.Number ? (FixedPoint)Data! : FixedPoint.FromInt(0);
