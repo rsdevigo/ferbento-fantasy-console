@@ -1,3 +1,5 @@
+using Ferbento.Scripting.Compiler.Ir;
+
 namespace Ferbento.Scripting.Vm;
 
 /// <summary>
@@ -7,4 +9,12 @@ namespace Ferbento.Scripting.Vm;
 public sealed class Pico8RuntimeException : Exception
 {
     public Pico8RuntimeException(string message) : base(message) { }
+
+    public Pico8RuntimeException(string message, SourceSpan? span, Exception? inner = null) : base(message, inner)
+    {
+        Span = span;
+    }
+
+    /// <summary>Where in the Lua source the error happened, when it came from the VM.</summary>
+    public SourceSpan? Span { get; }
 }
